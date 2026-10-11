@@ -7,7 +7,7 @@ const categories = ['Food & Dining', 'Shopping', 'Transportation', 'Education', 
 function App() {
   const [screen, setScreen] = useState('landing')
   const [activePage, setActivePage] = useState('Dashboard')
-  const [selectedFile, setSelectedFile] = useState('')
+  const [selectedFile, setSelectedFile] = useState(null)
   const [settings, setSettings] = useState({ name: '', email: '', income: '', monthlyBudget: '', savingsGoal: '' })
 
   const enterApp = () => { setScreen('app'); setActivePage('Dashboard') }
@@ -59,27 +59,53 @@ function DashboardPage({ onNavigate }) {
 function SummaryCard({ title, value, note, icon }) { return <div className="summary-card"><div className="summary-card-top"><span>{title}</span><span className="summary-icon">{icon}</span></div><h2>{value}</h2><p>{note}</p></div> }
 
 function UploadPage({ selectedFile, setSelectedFile }) {
-  const [message, setMessage] = useState('')
+  const [status, setStatus] = useState('')
+  const [summary, setSummary] = useState(null)
+  const [isLoading, setIsLoading] = useState(false)
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0]
-    setSelectedFile(file?.name || '')
-    setMessage(file ? 'CSV file selected successfully!' : '')
+    setSelectedFile(file || null)
+    setSummary(null)
+    setStatus('')
   }
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (!selectedFile) {
-      setMessage('Please choose a CSV file first.')
+      setStatus('Please choose a CSV file first.')
       return
     }
-    setMessage('CSV file selected successfully!')
+
+    setIsLoading(true)
+    setStatus('')
+    setSummary(null)
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+      const response = await fetch(`${apiUrl}/transactions/upload`, {
+        method: 'POST',
+        body: formData,
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.detail || 'The CSV could not be processed.')
+      }
+      setSummary(result)
+      setStatus('CSV processed successfully. Transaction data is not stored.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Unable to connect to the upload service.')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
     <>
       <PageHeader
         title="Upload Data"
-        subtitle="Choose a CSV bank statement to begin. The backend will process the file."
+        subtitle="Choose a CSV bank statement to begin. The backend will validate and summarize the file."
       />
 
       <div className="upload-layout">
@@ -87,8 +113,7 @@ function UploadPage({ selectedFile, setSelectedFile }) {
           <div className="upload-icon">⇧</div>
           <h2>Upload your bank statement</h2>
           <p>
-            Choose a CSV file from your device. This screen is UI-only; file
-            processing is not enabled in this version.
+            Choose a CSV file from your device. Your statement is processed in memory and is not stored.
           </p>
 
           <label className="file-button">
@@ -102,7 +127,7 @@ function UploadPage({ selectedFile, setSelectedFile }) {
 
           {selectedFile && (
             <div className="selected-file">
-              Selected file: {selectedFile}
+              Selected file: {selectedFile.name}
             </div>
           )}
 
@@ -110,14 +135,24 @@ function UploadPage({ selectedFile, setSelectedFile }) {
             className="primary-button"
             type="button"
             onClick={handleContinue}
+            disabled={isLoading}
           >
-            Continue
+            {isLoading ? 'Processing…' : 'Continue'}
           </button>
 
-          {message && (
-            <p className="notification success-notification" role="status">
-              {message}
+          {status && (
+            <p className="notification" role={summary ? 'status' : 'alert'}>
+              {status}
             </p>
+          )}
+
+          {summary && (
+            <div className="upload-summary" aria-label="Transaction summary">
+              <p>Total income: ₹{summary.total_income.toFixed(2)}</p>
+              <p>Total expenses: ₹{summary.total_expenses.toFixed(2)}</p>
+              <p>Net balance: ₹{summary.net_balance.toFixed(2)}</p>
+              <p>Transactions: {summary.transaction_count}</p>
+            </div>
           )}
 
           <small>Accepted format: .CSV</small>

@@ -29,7 +29,7 @@ python -m pip install -r backend\requirements.txt
 python -m uvicorn app.main:app --reload --app-dir backend
 ```
 
-The health endpoint is `GET http://127.0.0.1:8000/health` and returns `{"status":"ok"}` when the API is running. Interactive API documentation is available at `/docs`.
+The health endpoint is `GET http://127.0.0.1:8000/health` and returns `{"status":"ok"}` when the API is running. Upload a statement with `POST /transactions/upload` as multipart form data using the `file` field. CSVs must contain `date`, `description`, and `amount` headers; `category` is optional. Negative amounts count as expenses and positive amounts count as income. Files are limited to 5 MB and 10,000 transactions. Processing is in memory only; uploaded data is not stored. Interactive API documentation is available at `/docs`.
 
 ## Tests
 
@@ -51,6 +51,6 @@ python -m pytest backend\tests
 - `index.html` loads `src/main.jsx`, which mounts the existing `FinAdvisor.jsx` React app.
 - `FinAdvisor-App.css` remains the stylesheet for the existing light-and-purple interface.
 - `backend/app/main.py` contains the FastAPI app and health endpoint.
-- No financial transactions are uploaded, analyzed, or persisted in this phase. CSV processing, analytics, categorization, and assistant features are not implemented yet.
+- CSV uploads are validated and summarized in memory. Only aggregate income, expense, balance, and count values are returned; transaction rows are not stored.
 
 This application is an educational project, not professional financial advice. No bank credentials or external API keys are requested in this phase.
