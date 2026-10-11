@@ -1,0 +1,153 @@
+import { useState } from 'react'
+import './FinAdvisor-App.css'
+
+const pages = ['Dashboard', 'Upload Data', 'AI Analysis', 'Budget Planner', 'Settings']
+const categories = ['Food & Dining', 'Shopping', 'Transportation', 'Education', 'Entertainment', 'Housing & Rent', 'Bills & Utilities', 'Health & Medical', 'Savings & Investments', 'Travel', 'Family', 'Personal Care', 'EMIs & Loans', 'Others']
+
+function App() {
+  const [screen, setScreen] = useState('landing')
+  const [activePage, setActivePage] = useState('Dashboard')
+  const [selectedFile, setSelectedFile] = useState('')
+  const [settings, setSettings] = useState({ name: '', email: '', income: '', monthlyBudget: '', savingsGoal: '' })
+
+  const enterApp = () => { setScreen('app'); setActivePage('Dashboard') }
+  const logout = () => { setScreen('landing'); setActivePage('Dashboard') }
+
+  if (screen === 'landing') return <LandingPage onStart={() => setScreen('login')} />
+  if (screen === 'login') return <LoginPage onBack={() => setScreen('landing')} onLogin={enterApp} />
+
+  return (
+    <div className="app">
+      <Sidebar activePage={activePage} onNavigate={setActivePage} onLogout={logout} />
+      <main className="main-content">
+        {activePage === 'Dashboard' && <DashboardPage onNavigate={setActivePage} />}
+        {activePage === 'Upload Data' && <UploadPage selectedFile={selectedFile} setSelectedFile={setSelectedFile} />}
+        {activePage === 'AI Analysis' && <AnalysisPage />}
+        {activePage === 'Budget Planner' && <BudgetPage settings={settings} setSettings={setSettings} />}
+        {activePage === 'Settings' && <SettingsPage settings={settings} setSettings={setSettings} />}
+      </main>
+    </div>
+  )
+}
+
+function LandingPage({ onStart }) {
+  return <div className="landing-page">
+    <nav className="navbar"><div className="logo">FinAdvisor</div><div className="nav-links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#about">About</a><button className="login-btn" onClick={onStart}>Login</button></div></nav>
+    <section className="hero"><div className="hero-text"><h1>Take control of your <span>finances.</span></h1><p>Understand your spending, plan your budget and make more informed financial decisions with FinAdvisor.</p><button className="primary-btn" onClick={onStart}>Get Started</button></div><div className="hero-card"><h3>Financial Overview</h3><div className="preview-row"><span>Total Expenses</span><strong>—</strong></div><div className="preview-row"><span>Financial Health</span><strong>— / 100</strong></div><div className="preview-bar"><div style={{ width: '0%' }} /></div><p className="muted-note">Your overview will appear after financial data is connected.</p></div></section>
+    <section className="features-section" id="features"><h2>Powerful Financial Tools</h2><div className="feature-grid"><div className="feature-card"><h3>📊 Expense Analysis</h3><p>Explore category-wise spending once your data is available.</p></div><div className="feature-card"><h3>💰 Budget Planner</h3><p>Set a monthly budget and organize category limits.</p></div><div className="feature-card"><h3>🤖 Smart Insights</h3><p>View AI-generated insights when the analysis service is connected.</p></div></div></section>
+    <section className="how-section" id="how"><h2>How It Works</h2><div className="steps"><div><span>1</span><h3>Add Your Data</h3><p>Upload your bank statement in CSV format.</p></div><div><span>2</span><h3>Analyze</h3><p>Review your spending analysis when data is processed.</p></div><div><span>3</span><h3>Plan</h3><p>Use the dashboard and budget tools to plan ahead.</p></div></div></section>
+    <section className="about-section" id="about"><h2>About FinAdvisor</h2><p>FinAdvisor is a student project designed to make personal finance management simple, visual and accessible.</p></section><footer>© 2026 FinAdvisor. All rights reserved.</footer>
+  </div>
+}
+
+function LoginPage({ onBack, onLogin }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  return <div className="login-page"><button className="back-button" onClick={onBack}>← Back</button><form className="login-card" onSubmit={e => { e.preventDefault(); onLogin() }}><div className="logo">FinAdvisor</div><h2>Welcome back</h2><p>Sign in to continue to your dashboard.</p><label>Email address</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Enter your email" required /><label>Password</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required /><button className="primary-button" type="submit">Sign In</button><p className="muted-note">Frontend demo only — authentication will be connected by the backend team.</p></form></div>
+}
+
+function Sidebar({ activePage, onNavigate, onLogout }) {
+  return <aside className="sidebar"><div className="brand"><div className="brand-icon">F</div><strong>FinAdvisor</strong></div><nav className="sidebar-nav">{pages.map((page, i) => <button key={page} className={`option-button ${activePage === page ? 'active' : ''}`} onClick={() => onNavigate(page)}><span>{['▦', '⇧', '◉', '◫', '⚙'][i]}</span>{page}</button>)}</nav><div className="user-card"><div className="user-avatar">U</div><div><strong>User</strong><small>Personal Finance</small></div></div><button className="option-button logout-button" onClick={onLogout}>↪ Log out</button></aside>
+}
+
+function PageHeader({ title, subtitle, action }) { return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header> }
+function EmptyState({ title, message }) { return <div className="empty-state"><div className="empty-icon">◌</div><h3>{title}</h3><p>{message}</p></div> }
+
+function DashboardPage({ onNavigate }) {
+  return <><PageHeader title="Dashboard" subtitle="Your financial overview at a glance." action={<button className="primary-button" onClick={() => onNavigate('Upload Data')}>＋ Upload Data</button>} /><section className="summary-grid"><SummaryCard title="Total Balance" value="—" note="Connect your data to view balance" icon="◈" /><SummaryCard title="Monthly Income" value="—" note="No data available" icon="↗" /><SummaryCard title="Monthly Expenses" value="—" note="No data available" icon="↘" /><SummaryCard title="Financial Health" value="— / 100" note="Awaiting analysis" icon="♡" /></section><section className="dashboard-grid"><div className="panel"><div className="panel-title"><h3>Spending Overview</h3><span>Monthly</span></div><EmptyState title="No spending data yet" message="Upload a CSV statement to display your spending chart here." /></div><div className="panel health-panel"><div className="panel-title"><h3>Financial Health Score</h3></div><div className="score-circle"><span>—</span><small>out of 100</small></div><p className="muted-note">Your score will appear after the analysis service is connected.</p></div></section><section className="panel transactions-panel"><div className="panel-title"><h3>Recent Transactions</h3><button className="text-button" onClick={() => onNavigate('Upload Data')}>Upload data</button></div><EmptyState title="No transactions to show" message="Your recent transactions will appear here after data is processed." /></section></>
+}
+function SummaryCard({ title, value, note, icon }) { return <div className="summary-card"><div className="summary-card-top"><span>{title}</span><span className="summary-icon">{icon}</span></div><h2>{value}</h2><p>{note}</p></div> }
+
+function UploadPage({ selectedFile, setSelectedFile }) {
+  const [message, setMessage] = useState('')
+
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0]
+    setSelectedFile(file?.name || '')
+    setMessage(file ? 'CSV file selected successfully!' : '')
+  }
+
+  const handleContinue = () => {
+    if (!selectedFile) {
+      setMessage('Please choose a CSV file first.')
+      return
+    }
+    setMessage('CSV file selected successfully!')
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Upload Data"
+        subtitle="Choose a CSV bank statement to begin. The backend will process the file."
+      />
+
+      <div className="upload-layout">
+        <section className="panel upload-box">
+          <div className="upload-icon">⇧</div>
+          <h2>Upload your bank statement</h2>
+          <p>
+            Choose a CSV file from your device. This screen is UI-only; file
+            processing is not enabled in this version.
+          </p>
+
+          <label className="file-button">
+            Choose CSV file
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleFileChange}
+            />
+          </label>
+
+          {selectedFile && (
+            <div className="selected-file">
+              Selected file: {selectedFile}
+            </div>
+          )}
+
+          <button
+            className="primary-button"
+            type="button"
+            onClick={handleContinue}
+          >
+            Continue
+          </button>
+
+          {message && (
+            <p className="notification success-notification" role="status">
+              {message}
+            </p>
+          )}
+
+          <small>Accepted format: .CSV</small>
+        </section>
+
+        <aside className="panel side-info">
+          <h3>Before you upload</h3>
+          <ul>
+            <li>Use a CSV bank statement.</li>
+            <li>Review the file before sharing it.</li>
+          </ul>
+        </aside>
+      </div>
+    </>
+  )
+}
+
+function AnalysisPage() {
+  return <><PageHeader title="AI Expense Analysis" subtitle="Understand spending patterns and financial insights." /><section className="summary-grid"><SummaryCard title="Total Expenses" value="—" note="Waiting for transaction data" icon="↘" /><SummaryCard title="Top Category" value="—" note="Not available yet" icon="▤" /><SummaryCard title="Transactions" value="—" note="No data loaded" icon="≡" /></section><section className="analysis-grid"><div className="panel"><h3>Category-wise Expenses</h3><EmptyState title="Analysis not available" message="Category totals will appear here after the backend processes your transactions." /></div><div className="panel"><h3>AI Insights</h3><EmptyState title="Waiting for AI analysis" message="No recommendations are shown until the real analysis service is connected." /></div></section></>
+}
+
+function BudgetPage({ settings, setSettings }) {
+  const [saved, setSaved] = useState(false)
+  return <><PageHeader title="Budget Planner" subtitle="Enter your preferred monthly budget. Spending calculations will be connected later." /><section className="budget-grid"><div className="panel budget-card"><h3>Monthly Budget</h3><label htmlFor="monthlyBudget">Monthly budget (₹)</label><input id="monthlyBudget" type="number" min="0" placeholder="Enter monthly budget" value={settings.monthlyBudget} onChange={e => { setSettings({ ...settings, monthlyBudget: e.target.value }); setSaved(false) }} /><label htmlFor="income">Monthly income (₹)</label><input id="income" type="number" min="0" placeholder="Enter monthly income" value={settings.income} onChange={e => { setSettings({ ...settings, income: e.target.value }); setSaved(false) }} /><label htmlFor="savingsGoal">Savings goal (₹)</label><input id="savingsGoal" type="number" min="0" placeholder="Enter savings goal" value={settings.savingsGoal} onChange={e => { setSettings({ ...settings, savingsGoal: e.target.value }); setSaved(false) }} /><button className="primary-button" onClick={() => setSaved(true)}>Save Preferences</button>{saved && <p className="notification" role="status">Values saved for this session preview only.</p>}</div><div className="panel budget-card"><h3>Category Budgets</h3><p>Set limits for categories when budget management is connected.</p>{categories.slice(0, 6).map(category => <div className="category-limit" key={category}><span>{category}</span><span>—</span></div>)}</div></section></>
+}
+
+function SettingsPage({ settings, setSettings }) {
+  const [saved, setSaved] = useState(false)
+  const update = (key, value) => { setSettings({ ...settings, [key]: value }); setSaved(false) }
+  return <><PageHeader title="Settings" subtitle="Manage your profile and financial preferences." /><section className="settings-card"><h3>Profile Information</h3><div className="settings-form"><label htmlFor="name">Name</label><input id="name" value={settings.name} onChange={e => update('name', e.target.value)} placeholder="Enter your name" /><label htmlFor="email">Email</label><input id="email" type="email" value={settings.email} onChange={e => update('email', e.target.value)} placeholder="Enter your email" /></div><h3>Financial Preferences</h3><div className="settings-form"><label htmlFor="currency">Currency</label><select id="currency" defaultValue="INR"><option value="INR">INR - ₹</option><option value="USD">USD - $</option><option value="EUR">EUR - €</option></select><label htmlFor="dateFormat">Date format</label><select id="dateFormat" defaultValue="DD-MM-YYYY"><option>DD-MM-YYYY</option><option>MM-DD-YYYY</option><option>YYYY-MM-DD</option></select></div><button className="primary-button" onClick={() => setSaved(true)}>Save Settings</button>{saved && <p className="notification" role="status">Settings saved for this session preview only.</p>}<p className="muted-note">Backend storage and account security will be implemented separately.</p></section></>
+}
+
+export default App
