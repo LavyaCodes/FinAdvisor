@@ -8,6 +8,7 @@ function App() {
   const [screen, setScreen] = useState('landing')
   const [activePage, setActivePage] = useState('Dashboard')
   const [selectedFile, setSelectedFile] = useState(null)
+  const [uploadedData, setUploadedData] = useState(null)
   const [settings, setSettings] = useState({ name: '', email: '', income: '', monthlyBudget: '', savingsGoal: '' })
 
   const enterApp = () => { setScreen('app'); setActivePage('Dashboard') }
@@ -20,8 +21,8 @@ function App() {
     <div className="app">
       <Sidebar activePage={activePage} onNavigate={setActivePage} onLogout={logout} />
       <main className="main-content">
-        {activePage === 'Dashboard' && <DashboardPage onNavigate={setActivePage} />}
-        {activePage === 'Upload Data' && <UploadPage selectedFile={selectedFile} setSelectedFile={setSelectedFile} />}
+        {activePage === 'Dashboard' && <DashboardPage onNavigate={setActivePage} uploadedData={uploadedData} />}
+        {activePage === 'Upload Data' && <UploadPage selectedFile={selectedFile} setSelectedFile={setSelectedFile} uploadedData={uploadedData} setUploadedData={setUploadedData} />}
         {activePage === 'AI Analysis' && <AnalysisPage />}
         {activePage === 'Budget Planner' && <BudgetPage settings={settings} setSettings={setSettings} />}
         {activePage === 'Settings' && <SettingsPage settings={settings} setSettings={setSettings} />}
@@ -53,20 +54,168 @@ function Sidebar({ activePage, onNavigate, onLogout }) {
 function PageHeader({ title, subtitle, action }) { return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header> }
 function EmptyState({ title, message }) { return <div className="empty-state"><div className="empty-icon">◌</div><h3>{title}</h3><p>{message}</p></div> }
 
-function DashboardPage({ onNavigate }) {
-  return <><PageHeader title="Dashboard" subtitle="Your financial overview at a glance." action={<button className="primary-button" onClick={() => onNavigate('Upload Data')}>＋ Upload Data</button>} /><section className="summary-grid"><SummaryCard title="Total Balance" value="—" note="Connect your data to view balance" icon="◈" /><SummaryCard title="Monthly Income" value="—" note="No data available" icon="↗" /><SummaryCard title="Monthly Expenses" value="—" note="No data available" icon="↘" /><SummaryCard title="Financial Health" value="— / 100" note="Awaiting analysis" icon="♡" /></section><section className="dashboard-grid"><div className="panel"><div className="panel-title"><h3>Spending Overview</h3><span>Monthly</span></div><EmptyState title="No spending data yet" message="Upload a CSV statement to display your spending chart here." /></div><div className="panel health-panel"><div className="panel-title"><h3>Financial Health Score</h3></div><div className="score-circle"><span>—</span><small>out of 100</small></div><p className="muted-note">Your score will appear after the analysis service is connected.</p></div></section><section className="panel transactions-panel"><div className="panel-title"><h3>Recent Transactions</h3><button className="text-button" onClick={() => onNavigate('Upload Data')}>Upload data</button></div><EmptyState title="No transactions to show" message="Your recent transactions will appear here after data is processed." /></section></>
+function DashboardPage({ onNavigate, uploadedData }) {
+  const categoryExpenses = uploadedData?.category_expenses ?? {}
+  const categoryEntries = Object.entries(categoryExpenses)
+  const largestCategoryExpense = Math.max(0, ...Object.values(categoryExpenses))
+
+  return (
+    <>
+      <PageHeader
+        title="Dashboard"
+        subtitle="Your financial overview at a glance."
+        action={
+          <button className="primary-button" onClick={() => onNavigate('Upload Data')}>
+            ＋ Upload Data
+          </button>
+        }
+      />
+
+      <section className="summary-grid">
+        <SummaryCard
+          title="Net Balance"
+          value={uploadedData ? formatAmount(uploadedData.net_balance) : '—'}
+          note={uploadedData ? 'Income minus expenses in this upload' : 'Connect your data to view balance'}
+          icon="◈"
+        />
+        <SummaryCard
+          title="Total Income"
+          value={uploadedData ? formatAmount(uploadedData.total_income) : '—'}
+          note={uploadedData ? 'From uploaded transactions' : 'No data available'}
+          icon="↗"
+        />
+        <SummaryCard
+          title="Total Expenses"
+          value={uploadedData ? formatAmount(uploadedData.total_expenses) : '—'}
+          note={uploadedData ? 'From uploaded transactions' : 'No data available'}
+          icon="↘"
+        />
+        <SummaryCard title="Financial Health" value="— / 100" note="Awaiting analysis" icon="♡" />
+      </section>
+
+      <section className="dashboard-grid">
+        <div className="panel">
+          <div className="panel-title">
+            <h3>Spending Overview</h3>
+            <span>By category</span>
+          </div>
+          {!uploadedData ? (
+            <EmptyState
+              title="No spending data yet"
+              message="Upload a CSV statement to display your spending breakdown here."
+            />
+          ) : categoryEntries.length === 0 ? (
+            <EmptyState
+              title="No expenses recorded"
+              message="This upload has no expense transactions to group by category."
+            />
+          ) : (
+            <CategoryBreakdown categories={categoryEntries} largestExpense={largestCategoryExpense} />
+          )}
+        </div>
+
+        <div className="panel health-panel">
+          <div className="panel-title"><h3>Financial Health Score</h3></div>
+          <div className="score-circle"><span>—</span><small>out of 100</small></div>
+          <p className="muted-note">Your score will appear after the analysis service is connected.</p>
+        </div>
+      </section>
+
+      <section className="panel transactions-panel">
+        <div className="panel-title">
+          <h3>Uploaded Transactions</h3>
+          <button className="text-button" onClick={() => onNavigate('Upload Data')}>Upload data</button>
+        </div>
+        {uploadedData ? (
+          <>
+            <p className="transaction-count">
+              {uploadedData.transaction_count} transaction{uploadedData.transaction_count === 1 ? '' : 's'}
+            </p>
+            <TransactionTable transactions={uploadedData.transactions} />
+          </>
+        ) : (
+          <EmptyState
+            title="No transactions to show"
+            message="Your uploaded transactions will appear here after data is processed."
+          />
+        )}
+      </section>
+    </>
+  )
 }
 function SummaryCard({ title, value, note, icon }) { return <div className="summary-card"><div className="summary-card-top"><span>{title}</span><span className="summary-icon">{icon}</span></div><h2>{value}</h2><p>{note}</p></div> }
 
-function UploadPage({ selectedFile, setSelectedFile }) {
+function formatAmount(amount) {
+  const value = Number(amount)
+  const formattedValue = Math.abs(value).toFixed(2)
+  return value < 0 ? `−₹${formattedValue}` : `₹${formattedValue}`
+}
+
+function CategoryBreakdown({ categories, largestExpense }) {
+  return (
+    <div className="category-breakdown" aria-label="Expenses by category">
+      {categories.map(([category, amount]) => (
+        <div className="category-breakdown-item" key={category}>
+          <div className="category-breakdown-label">
+            <span>{category}</span>
+            <strong>{formatAmount(amount)}</strong>
+          </div>
+          <div
+            className="category-bar"
+            role="progressbar"
+            aria-label={`${category} spending`}
+            aria-valuemin="0"
+            aria-valuemax={largestExpense}
+            aria-valuenow={amount}
+          >
+            <div
+              className="category-bar-fill"
+              style={{ width: `${largestExpense ? (amount / largestExpense) * 100 : 0}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TransactionTable({ transactions }) {
+  return (
+    <div className="transaction-table-wrap">
+      <table className="transaction-table">
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col">Description</th>
+            <th scope="col">Category</th>
+            <th scope="col">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {transactions.map((transaction, index) => (
+            <tr key={`${transaction.date}-${index}`}>
+              <td>{transaction.date}</td>
+              <td>{transaction.description || '—'}</td>
+              <td>{transaction.category}</td>
+              <td className={transaction.amount < 0 ? 'transaction-expense' : 'transaction-income'}>
+                {formatAmount(transaction.amount)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function UploadPage({ selectedFile, setSelectedFile, uploadedData, setUploadedData }) {
   const [status, setStatus] = useState('')
-  const [summary, setSummary] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0]
     setSelectedFile(file || null)
-    setSummary(null)
+    setUploadedData(null)
     setStatus('')
   }
 
@@ -78,7 +227,7 @@ function UploadPage({ selectedFile, setSelectedFile }) {
 
     setIsLoading(true)
     setStatus('')
-    setSummary(null)
+    setUploadedData(null)
     const formData = new FormData()
     formData.append('file', selectedFile)
 
@@ -92,8 +241,8 @@ function UploadPage({ selectedFile, setSelectedFile }) {
       if (!response.ok) {
         throw new Error(result.detail || 'The CSV could not be processed.')
       }
-      setSummary(result)
-      setStatus('CSV processed successfully. Transaction data is not stored.')
+      setUploadedData(result)
+      setStatus('CSV processed successfully. Results are available for this session only.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Unable to connect to the upload service.')
     } finally {
@@ -141,17 +290,17 @@ function UploadPage({ selectedFile, setSelectedFile }) {
           </button>
 
           {status && (
-            <p className="notification" role={summary ? 'status' : 'alert'}>
+            <p className="notification" role={uploadedData ? 'status' : 'alert'}>
               {status}
             </p>
           )}
 
-          {summary && (
+          {uploadedData && (
             <div className="upload-summary" aria-label="Transaction summary">
-              <p>Total income: ₹{summary.total_income.toFixed(2)}</p>
-              <p>Total expenses: ₹{summary.total_expenses.toFixed(2)}</p>
-              <p>Net balance: ₹{summary.net_balance.toFixed(2)}</p>
-              <p>Transactions: {summary.transaction_count}</p>
+              <p>Total income: {formatAmount(uploadedData.total_income)}</p>
+              <p>Total expenses: {formatAmount(uploadedData.total_expenses)}</p>
+              <p>Net balance: {formatAmount(uploadedData.net_balance)}</p>
+              <p>Transactions: {uploadedData.transaction_count}</p>
             </div>
           )}
 

@@ -1,6 +1,6 @@
 # FinAdvisor
 
-FinAdvisor is a React personal-finance dashboard with a small FastAPI service. This Phase 1 setup makes the existing frontend runnable and exposes a backend health check. It does not yet process or store transaction data.
+FinAdvisor is a React personal-finance dashboard with a small FastAPI service. CSV statements are validated and summarized in memory, and the dashboard displays their transactions and spending by category. Uploaded data is not persisted by the backend.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ python -m pip install -r backend\requirements.txt
 python -m uvicorn app.main:app --reload --app-dir backend
 ```
 
-The health endpoint is `GET http://127.0.0.1:8000/health` and returns `{"status":"ok"}` when the API is running. Upload a statement with `POST /transactions/upload` as multipart form data using the `file` field. CSVs must contain `date`, `description`, and `amount` headers; `category` is optional. Negative amounts count as expenses and positive amounts count as income. Files are limited to 5 MB and 10,000 transactions. Processing is in memory only; uploaded data is not stored. Interactive API documentation is available at `/docs`.
+The health endpoint is `GET http://127.0.0.1:8000/health` and returns `{"status":"ok"}` when the API is running. Upload a statement with `POST /transactions/upload` as multipart form data using the `file` field. CSVs must contain `date`, `description`, and `amount` headers; `category` is optional. Negative amounts count as expenses and positive amounts count as income. Files are limited to 5 MB and 10,000 transactions. Processing is in memory only; uploaded data is not stored by the backend. A successful upload returns the existing `total_income`, `total_expenses`, `net_balance`, and `transaction_count` summary fields, plus a `transactions` array (`date`, `description`, `category`, and signed `amount`) and a `category_expenses` object. Missing or blank categories are labeled `Uncategorized`; category totals include expense amounts only, as positive values. Interactive API documentation is available at `/docs`.
 
 ## Tests
 
@@ -51,6 +51,6 @@ python -m pytest backend\tests
 - `index.html` loads `src/main.jsx`, which mounts the existing `FinAdvisor.jsx` React app.
 - `FinAdvisor-App.css` remains the stylesheet for the existing light-and-purple interface.
 - `backend/app/main.py` contains the FastAPI app and health endpoint.
-- CSV uploads are validated and summarized in memory. Only aggregate income, expense, balance, and count values are returned; transaction rows are not stored.
+- CSV uploads are validated and summarized in memory. The API returns aggregate income, expense, balance, and count values, individual transaction rows, and expense totals by category. The React app keeps the latest upload response in `App` state for the current session so it remains available while navigating between pages; neither the backend nor a database persists it.
 
 This application is an educational project, not professional financial advice. No bank credentials or external API keys are requested in this phase.

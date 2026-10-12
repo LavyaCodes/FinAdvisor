@@ -10,8 +10,13 @@ from pandas.errors import EmptyDataError, ParserError
 app = FastAPI(title="FinAdvisor API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -26,8 +31,8 @@ def health_check() -> dict[str, str]:
 
 
 @app.post("/transactions/upload")
-async def upload_transactions(file: UploadFile = File(...)) -> dict[str, int | float]:
-    """Validate a CSV statement and return a summary without retaining its data."""
+async def upload_transactions(file: UploadFile = File(...)) -> dict[str, object]:
+    """Validate a CSV statement and return its summary and rows without retaining them."""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a file with a .csv extension.")
 
@@ -79,9 +84,40 @@ async def upload_transactions(file: UploadFile = File(...)) -> dict[str, int | f
     total_expenses = float(-amounts[amounts < 0].sum())
     if not isfinite(total_income) or not isfinite(total_expenses):
         raise HTTPException(status_code=422, detail="Transaction totals exceed the supported numeric range.")
+
+    # Categories are optional in uploaded CSVs, so give missing or blank ones a
+    # predictable label that the dashboard can display and aggregate.
+    if "category" in transactions.columns:
+        categories = transactions["category"].fillna("").astype(str).str.strip()
+        categories = categories.where(categories != "", "Uncategorized")
+    else:
+        categories = pd.Series("Uncategorized", index=transactions.index)
+
+    descriptions = transactions["description"].fillna("").astype(str).str.strip()
+    transaction_records = []
+    category_expenses: dict[str, float] = {}
+    for transaction_date, description, category, amount in zip(dates, descriptions, categories, amounts):
+        amount_value = float(amount)
+        category_name = str(category)
+        transaction_records.append(
+            {
+                "date": transaction_date.strftime("%Y-%m-%d"),
+                "description": description,
+                "category": category_name,
+                "amount": amount_value,
+            }
+        )
+        if amount_value < 0:
+            category_expenses[category_name] = category_expenses.get(category_name, 0.0) - amount_value
+
     return {
         "total_income": round(total_income, 2),
         "total_expenses": round(total_expenses, 2),
         "net_balance": round(total_income - total_expenses, 2),
         "transaction_count": int(len(transactions)),
+        "transactions": transaction_records,
+        "category_expenses": {
+            category: round(expense_total, 2)
+            for category, expense_total in sorted(category_expenses.items())
+        },
     }
