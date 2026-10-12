@@ -2,13 +2,65 @@ import { useState } from 'react'
 import './FinAdvisor-App.css'
 
 const pages = ['Dashboard', 'Upload Data', 'AI Analysis', 'Budget Planner', 'Settings']
-const categories = ['Food & Dining', 'Shopping', 'Transportation', 'Education', 'Entertainment', 'Housing & Rent', 'Bills & Utilities', 'Health & Medical', 'Savings & Investments', 'Travel', 'Family', 'Personal Care', 'EMIs & Loans', 'Others']
+const budgetCategories = [
+  'Food & Dining', 'Shopping', 'Transportation', 'Education', 'Entertainment',
+  'Housing & Rent', 'Bills & Utilities', 'Health & Medical', 'Travel', 'Family',
+  'Personal Care', 'EMI & Loans', 'Others', 'Uncategorized',
+]
+const categoryAliases = {
+  food: 'Food & Dining',
+  groceries: 'Food & Dining',
+  'groceries and restaurants': 'Food & Dining',
+  dining: 'Food & Dining',
+  restaurant: 'Food & Dining',
+  restaurants: 'Food & Dining',
+  transport: 'Transportation',
+  'transport and transportation': 'Transportation',
+  traveling: 'Travel',
+  trips: 'Travel',
+  emi: 'EMI & Loans',
+  'emi and loan': 'EMI & Loans',
+  'emi and loans': 'EMI & Loans',
+  'emis and loans': 'EMI & Loans',
+  loan: 'EMI & Loans',
+  loans: 'EMI & Loans',
+  other: 'Others',
+  uncategorized: 'Uncategorized',
+}
+const nonExpenseCategoryKeys = new Set([
+  'income', 'salary', 'salaries', 'wage', 'wages', 'paycheck', 'earnings',
+  'interest income', 'dividend', 'dividends', 'refund', 'refunds',
+  'savings and investments', 'savings investment', 'investment', 'investments',
+])
+
+function categoryKey(category) {
+  return String(category ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+const canonicalCategoryByKey = Object.fromEntries(
+  budgetCategories.map(category => [categoryKey(category), category]),
+)
+
+function normalizeBudgetCategory(rawCategory) {
+  const key = categoryKey(rawCategory)
+  if (nonExpenseCategoryKeys.has(key)) return null
+  if (key === 'other income' || key === 'additional income' || key === 'business income' || key === 'rental income') return null
+  if (!key) return 'Uncategorized'
+  return categoryAliases[key] ?? canonicalCategoryByKey[key] ?? 'Others'
+}
 
 function App() {
   const [screen, setScreen] = useState('landing')
   const [activePage, setActivePage] = useState('Dashboard')
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadedData, setUploadedData] = useState(null)
+  const [categoryBudgets, setCategoryBudgets] = useState({})
   const [settings, setSettings] = useState({ name: '', email: '', income: '', monthlyBudget: '', savingsGoal: '' })
 
   const enterApp = () => { setScreen('app'); setActivePage('Dashboard') }
@@ -24,7 +76,7 @@ function App() {
         {activePage === 'Dashboard' && <DashboardPage onNavigate={setActivePage} uploadedData={uploadedData} />}
         {activePage === 'Upload Data' && <UploadPage selectedFile={selectedFile} setSelectedFile={setSelectedFile} uploadedData={uploadedData} setUploadedData={setUploadedData} />}
         {activePage === 'AI Analysis' && <AnalysisPage />}
-        {activePage === 'Budget Planner' && <BudgetPage settings={settings} setSettings={setSettings} />}
+        {activePage === 'Budget Planner' && <BudgetPage uploadedData={uploadedData} categoryBudgets={categoryBudgets} setCategoryBudgets={setCategoryBudgets} />}
         {activePage === 'Settings' && <SettingsPage settings={settings} setSettings={setSettings} />}
       </main>
     </div>
@@ -323,9 +375,197 @@ function AnalysisPage() {
   return <><PageHeader title="AI Expense Analysis" subtitle="Understand spending patterns and financial insights." /><section className="summary-grid"><SummaryCard title="Total Expenses" value="—" note="Waiting for transaction data" icon="↘" /><SummaryCard title="Top Category" value="—" note="Not available yet" icon="▤" /><SummaryCard title="Transactions" value="—" note="No data loaded" icon="≡" /></section><section className="analysis-grid"><div className="panel"><h3>Category-wise Expenses</h3><EmptyState title="Analysis not available" message="Category totals will appear here after the backend processes your transactions." /></div><div className="panel"><h3>AI Insights</h3><EmptyState title="Waiting for AI analysis" message="No recommendations are shown until the real analysis service is connected." /></div></section></>
 }
 
-function BudgetPage({ settings, setSettings }) {
-  const [saved, setSaved] = useState(false)
-  return <><PageHeader title="Budget Planner" subtitle="Enter your preferred monthly budget. Spending calculations will be connected later." /><section className="budget-grid"><div className="panel budget-card"><h3>Monthly Budget</h3><label htmlFor="monthlyBudget">Monthly budget (₹)</label><input id="monthlyBudget" type="number" min="0" placeholder="Enter monthly budget" value={settings.monthlyBudget} onChange={e => { setSettings({ ...settings, monthlyBudget: e.target.value }); setSaved(false) }} /><label htmlFor="income">Monthly income (₹)</label><input id="income" type="number" min="0" placeholder="Enter monthly income" value={settings.income} onChange={e => { setSettings({ ...settings, income: e.target.value }); setSaved(false) }} /><label htmlFor="savingsGoal">Savings goal (₹)</label><input id="savingsGoal" type="number" min="0" placeholder="Enter savings goal" value={settings.savingsGoal} onChange={e => { setSettings({ ...settings, savingsGoal: e.target.value }); setSaved(false) }} /><button className="primary-button" onClick={() => setSaved(true)}>Save Preferences</button>{saved && <p className="notification" role="status">Values saved for this session preview only.</p>}</div><div className="panel budget-card"><h3>Category Budgets</h3><p>Set limits for categories when budget management is connected.</p>{categories.slice(0, 6).map(category => <div className="category-limit" key={category}><span>{category}</span><span>—</span></div>)}</div></section></>
+function BudgetPage({ uploadedData, categoryBudgets, setCategoryBudgets }) {
+  const uploadedMonths = [...new Set(
+    (uploadedData?.transactions ?? []).map(transaction => transaction.date.slice(0, 7)),
+  )].sort()
+  const [selectedMonth, setSelectedMonth] = useState('')
+  const activeMonth = uploadedMonths.includes(selectedMonth)
+    ? selectedMonth
+    : uploadedMonths[uploadedMonths.length - 1] ?? ''
+  const availableCategories = budgetCategories
+  const expenses = {}
+
+  // Upload amounts use negative values for expenses; positive income is intentionally skipped.
+  if (uploadedData && activeMonth) {
+    for (const transaction of uploadedData.transactions) {
+      const transactionMonth = transaction.date.slice(0, 7)
+      if (transactionMonth !== activeMonth || transaction.amount >= 0) continue
+
+      const category = normalizeBudgetCategory(transaction.category)
+      if (!category) continue
+      expenses[category] = (expenses[category] ?? 0) + Math.abs(transaction.amount)
+    }
+  }
+
+  const updateBudget = (category, value) => {
+    setCategoryBudgets(currentBudgets => ({ ...currentBudgets, [category]: value }))
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Budget Planner"
+        subtitle="Set a monthly limit for each category and compare it with your uploaded spending."
+      />
+
+      <p className="budget-session-note" role="note">
+        Budgets are saved in this app session only. They are not permanently stored and will reset when you reload the app.
+      </p>
+
+      {uploadedMonths.length > 0 && (
+        <div className="budget-month-control">
+          <label htmlFor="budgetMonth">Spending month</label>
+          <select
+            id="budgetMonth"
+            value={activeMonth}
+            onChange={event => setSelectedMonth(event.target.value)}
+          >
+            {uploadedMonths.map(month => (
+              <option key={month} value={month}>{formatMonthLabel(month)}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {!uploadedData && (
+        <p className="budget-empty-note" role="status">
+          Upload a CSV to compare your limits with expenses. You can set category budgets now.
+        </p>
+      )}
+
+      <section className="budget-grid">
+        <div className="panel budget-card">
+          <h3>Monthly Category Limits</h3>
+          <p>Enter a spending limit for the categories you want to track.</p>
+          <div className="budget-input-list">
+            {availableCategories.map(category => (
+              <div className="budget-input-row" key={category}>
+                <label htmlFor={`budget-${category}`}>{category}</label>
+                <div className="budget-input-control">
+                  <span aria-hidden="true">₹</span>
+                  <input
+                    id={`budget-${category}`}
+                    aria-label={`Budget for ${category}`}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="No limit"
+                    value={categoryBudgets[category] ?? ''}
+                    onChange={event => {
+                      const value = event.target.value
+                      if (value === '' || Number(value) >= 0) updateBudget(category, value)
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel budget-card budget-comparison-card">
+          <h3>Spending vs. Budget</h3>
+          {uploadedData ? (
+            <>
+              <p>Comparing expenses in {formatMonthLabel(activeMonth)} with your monthly limits.</p>
+              <div className="budget-comparison-list">
+                {availableCategories.map(category => (
+                  <BudgetComparison
+                    key={category}
+                    category={category}
+                    spent={expenses[category] ?? 0}
+                    budgetValue={categoryBudgets[category]}
+                  />
+                ))}
+              </div>
+            </>
+          ) : (
+            <EmptyState
+              title="No uploaded spending yet"
+              message="Your category comparisons will appear here after you upload transaction data."
+            />
+          )}
+        </div>
+      </section>
+    </>
+  )
+}
+
+function formatMonthLabel(month) {
+  if (!month) return 'No month selected'
+  return new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' })
+    .format(new Date(`${month}-01T00:00:00`))
+}
+
+function BudgetComparison({ category, spent, budgetValue }) {
+  const hasBudget = budgetValue !== undefined && budgetValue !== ''
+  const budget = hasBudget ? Number(budgetValue) : null
+  const remaining = hasBudget ? budget - spent : null
+  const percentageUsed = hasBudget && budget > 0 ? (spent / budget) * 100 : null
+  let status = 'No budget set'
+  let statusClass = 'budget-status-unset'
+  let alert = 'Set a budget to see remaining funds and spending alerts.'
+
+  if (hasBudget && budget === 0 && spent > 0) {
+    status = 'Exceeded budget'
+    statusClass = 'budget-status-exceeded'
+    alert = `Exceeded budget by ${formatAmount(spent)}.`
+  } else if (hasBudget && percentageUsed !== null && percentageUsed > 100) {
+    status = 'Exceeded budget'
+    statusClass = 'budget-status-exceeded'
+    alert = `Exceeded budget by ${formatAmount(Math.abs(remaining))}.`
+  } else if (hasBudget && percentageUsed === 100) {
+    status = 'Budget fully used'
+    statusClass = 'budget-status-full'
+    alert = 'The full category budget has been used.'
+  } else if (hasBudget && percentageUsed !== null && percentageUsed >= 80) {
+    status = 'Approaching budget'
+    statusClass = 'budget-status-approaching'
+    alert = 'Spending has reached at least 80% of this budget.'
+  } else if (hasBudget) {
+    status = 'Within budget'
+    statusClass = 'budget-status-within'
+    alert = 'Spending is within this category budget.'
+  }
+
+  const progressValue = percentageUsed === null ? 0 : Math.min(percentageUsed, 100)
+
+  return (
+    <article className="budget-comparison-row">
+      <div className="budget-comparison-heading">
+        <h4>{category}</h4>
+        <span className={`budget-status ${statusClass}`}>{status}</span>
+      </div>
+      <div className="budget-metrics">
+        <div><span>Spent</span><strong>{formatAmount(spent)}</strong></div>
+        <div>
+          <span>Remaining</span>
+          <strong className={remaining !== null && remaining < 0 ? 'budget-negative' : ''}>
+            {remaining === null ? '—' : formatAmount(remaining)}
+          </strong>
+        </div>
+        <div>
+          <span>Used</span>
+          <strong>{percentageUsed === null ? (budget === 0 ? 'N/A' : '—') : `${percentageUsed.toFixed(1)}%`}</strong>
+        </div>
+      </div>
+      {hasBudget && budget > 0 && (
+        <div
+          className={`budget-progress ${statusClass}`}
+          role="progressbar"
+          aria-label={`${category} budget used`}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={Math.min(percentageUsed, 100)}
+        >
+          <div className="budget-progress-fill" style={{ width: `${progressValue}%` }} />
+        </div>
+      )}
+      <p className={`budget-alert ${statusClass}`} role={statusClass === 'budget-status-exceeded' || statusClass === 'budget-status-approaching' ? 'alert' : 'status'}>
+        {alert}
+      </p>
+    </article>
+  )
 }
 
 function SettingsPage({ settings, setSettings }) {
