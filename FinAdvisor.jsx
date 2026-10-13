@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import './FinAdvisor-App.css'
 
-const pages = ['Dashboard', 'Upload Data', 'AI Analysis', 'Budget Planner', 'Settings']
+const pages = ['Dashboard', 'Upload Data', 'Spending Insights', 'Anomaly Detection', 'Budget Planner', 'Settings']
 const budgetCategories = [
   'Food & Dining', 'Shopping', 'Transportation', 'Education', 'Entertainment',
   'Housing & Rent', 'Bills & Utilities', 'Health & Medical', 'Travel', 'Family',
@@ -55,6 +55,85 @@ function normalizeBudgetCategory(rawCategory) {
   return categoryAliases[key] ?? canonicalCategoryByKey[key] ?? 'Others'
 }
 
+const MIN_ANOMALY_SAMPLE_SIZE = 5
+
+function median(values) {
+  const sortedValues = [...values].sort((first, second) => first - second)
+  const middleIndex = Math.floor(sortedValues.length / 2)
+  if (sortedValues.length % 2 === 1) return sortedValues[middleIndex]
+  return (sortedValues[middleIndex - 1] + sortedValues[middleIndex]) / 2
+}
+
+function isValidTransactionDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+function findExpenseAnomalies(uploadedData) {
+  const transactions = Array.isArray(uploadedData?.transactions) ? uploadedData.transactions : []
+  let invalidAmountCount = 0
+  const expenses = []
+  for (const transaction of transactions) {
+    const rawAmount = transaction?.amount
+    const amount = typeof rawAmount === 'number'
+      ? rawAmount
+      : typeof rawAmount === 'string' && rawAmount.trim() !== ''
+        ? Number(rawAmount)
+        : Number.NaN
+    if (!Number.isFinite(amount)) {
+      invalidAmountCount += 1
+      continue
+    }
+    if (amount < 0) expenses.push({ transaction, amount: Math.abs(amount) })
+  }
+
+  if (expenses.length < MIN_ANOMALY_SAMPLE_SIZE) {
+    return { status: 'insufficient', expenseCount: expenses.length, invalidAmountCount, anomalies: [] }
+  }
+
+  const expenseValues = expenses.map(expense => expense.amount)
+  const typicalExpense = median(expenseValues)
+  const medianAbsoluteDeviation = median(expenseValues.map(value => Math.abs(value - typicalExpense)))
+  const threshold = typicalExpense + (3 * medianAbsoluteDeviation)
+
+  // A zero MAD or invalid/non-increasing threshold cannot distinguish outliers reliably.
+  if (!Number.isFinite(medianAbsoluteDeviation) || medianAbsoluteDeviation <= 0
+    || !Number.isFinite(threshold) || threshold <= typicalExpense) {
+    return {
+      status: 'unassessable',
+      expenseCount: expenses.length,
+      invalidAmountCount,
+      typicalExpense,
+      medianAbsoluteDeviation,
+      anomalies: [],
+    }
+  }
+
+  const anomalies = expenses
+    .filter(expense => expense.amount > threshold)
+    .map(({ transaction, amount }) => ({
+      description: typeof transaction.description === 'string' && transaction.description.trim()
+        ? transaction.description.trim()
+        : 'Description unavailable',
+      date: isValidTransactionDate(transaction.date) ? transaction.date : null,
+      category: normalizeBudgetCategory(transaction.category) ?? 'Others',
+      amount,
+      threshold,
+      typicalExpense,
+    }))
+
+  return {
+    status: 'assessed',
+    expenseCount: expenses.length,
+    invalidAmountCount,
+    typicalExpense,
+    medianAbsoluteDeviation,
+    threshold,
+    anomalies,
+  }
+}
+
 function App() {
   const [screen, setScreen] = useState('landing')
   const [activePage, setActivePage] = useState('Dashboard')
@@ -75,7 +154,8 @@ function App() {
       <main className="main-content">
         {activePage === 'Dashboard' && <DashboardPage onNavigate={setActivePage} uploadedData={uploadedData} />}
         {activePage === 'Upload Data' && <UploadPage selectedFile={selectedFile} setSelectedFile={setSelectedFile} uploadedData={uploadedData} setUploadedData={setUploadedData} />}
-        {activePage === 'AI Analysis' && <AnalysisPage />}
+        {activePage === 'Spending Insights' && <AnalysisPage uploadedData={uploadedData} />}
+        {activePage === 'Anomaly Detection' && <AnomalyDetectionPage uploadedData={uploadedData} />}
         {activePage === 'Budget Planner' && <BudgetPage uploadedData={uploadedData} categoryBudgets={categoryBudgets} setCategoryBudgets={setCategoryBudgets} />}
         {activePage === 'Settings' && <SettingsPage settings={settings} setSettings={setSettings} />}
       </main>
@@ -87,7 +167,7 @@ function LandingPage({ onStart }) {
   return <div className="landing-page">
     <nav className="navbar"><div className="logo">FinAdvisor</div><div className="nav-links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#about">About</a><button className="login-btn" onClick={onStart}>Login</button></div></nav>
     <section className="hero"><div className="hero-text"><h1>Take control of your <span>finances.</span></h1><p>Understand your spending, plan your budget and make more informed financial decisions with FinAdvisor.</p><button className="primary-btn" onClick={onStart}>Get Started</button></div><div className="hero-card"><h3>Financial Overview</h3><div className="preview-row"><span>Total Expenses</span><strong>—</strong></div><div className="preview-row"><span>Financial Health</span><strong>— / 100</strong></div><div className="preview-bar"><div style={{ width: '0%' }} /></div><p className="muted-note">Your overview will appear after financial data is connected.</p></div></section>
-    <section className="features-section" id="features"><h2>Powerful Financial Tools</h2><div className="feature-grid"><div className="feature-card"><h3>📊 Expense Analysis</h3><p>Explore category-wise spending once your data is available.</p></div><div className="feature-card"><h3>💰 Budget Planner</h3><p>Set a monthly budget and organize category limits.</p></div><div className="feature-card"><h3>🤖 Smart Insights</h3><p>View AI-generated insights when the analysis service is connected.</p></div></div></section>
+    <section className="features-section" id="features"><h2>Powerful Financial Tools</h2><div className="feature-grid"><div className="feature-card"><h3>📊 Expense Analysis</h3><p>Explore category-wise spending once your data is available.</p></div><div className="feature-card"><h3>💰 Budget Planner</h3><p>Set a monthly budget and organize category limits.</p></div><div className="feature-card"><h3>📈 Spending Insights</h3><p>Review clear observations based on your uploaded transaction data.</p></div></div></section>
     <section className="how-section" id="how"><h2>How It Works</h2><div className="steps"><div><span>1</span><h3>Add Your Data</h3><p>Upload your bank statement in CSV format.</p></div><div><span>2</span><h3>Analyze</h3><p>Review your spending analysis when data is processed.</p></div><div><span>3</span><h3>Plan</h3><p>Use the dashboard and budget tools to plan ahead.</p></div></div></section>
     <section className="about-section" id="about"><h2>About FinAdvisor</h2><p>FinAdvisor is a student project designed to make personal finance management simple, visual and accessible.</p></section><footer>© 2026 FinAdvisor. All rights reserved.</footer>
   </div>
@@ -100,7 +180,7 @@ function LoginPage({ onBack, onLogin }) {
 }
 
 function Sidebar({ activePage, onNavigate, onLogout }) {
-  return <aside className="sidebar"><div className="brand"><div className="brand-icon">F</div><strong>FinAdvisor</strong></div><nav className="sidebar-nav">{pages.map((page, i) => <button key={page} className={`option-button ${activePage === page ? 'active' : ''}`} onClick={() => onNavigate(page)}><span>{['▦', '⇧', '◉', '◫', '⚙'][i]}</span>{page}</button>)}</nav><div className="user-card"><div className="user-avatar">U</div><div><strong>User</strong><small>Personal Finance</small></div></div><button className="option-button logout-button" onClick={onLogout}>↪ Log out</button></aside>
+  return <aside className="sidebar"><div className="brand"><div className="brand-icon">F</div><strong>FinAdvisor</strong></div><nav className="sidebar-nav">{pages.map((page, i) => <button key={page} className={`option-button ${activePage === page ? 'active' : ''}`} onClick={() => onNavigate(page)}><span>{['▦', '⇧', '◉', '!', '◫', '⚙'][i]}</span>{page}</button>)}</nav><div className="user-card"><div className="user-avatar">U</div><div><strong>User</strong><small>Personal Finance</small></div></div><button className="option-button logout-button" onClick={onLogout}>↪ Log out</button></aside>
 }
 
 function PageHeader({ title, subtitle, action }) { return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header> }
@@ -371,8 +451,289 @@ function UploadPage({ selectedFile, setSelectedFile, uploadedData, setUploadedDa
   )
 }
 
-function AnalysisPage() {
-  return <><PageHeader title="AI Expense Analysis" subtitle="Understand spending patterns and financial insights." /><section className="summary-grid"><SummaryCard title="Total Expenses" value="—" note="Waiting for transaction data" icon="↘" /><SummaryCard title="Top Category" value="—" note="Not available yet" icon="▤" /><SummaryCard title="Transactions" value="—" note="No data loaded" icon="≡" /></section><section className="analysis-grid"><div className="panel"><h3>Category-wise Expenses</h3><EmptyState title="Analysis not available" message="Category totals will appear here after the backend processes your transactions." /></div><div className="panel"><h3>AI Insights</h3><EmptyState title="Waiting for AI analysis" message="No recommendations are shown until the real analysis service is connected." /></div></section></>
+function getExpenseInsights(uploadedData) {
+  const categoryTotals = {}
+  const monthTotals = {}
+  let expensesWithoutValidDate = 0
+  const transactions = uploadedData?.transactions ?? []
+
+  for (const transaction of transactions) {
+    const amount = Number(transaction.amount)
+    if (!Number.isFinite(amount) || amount >= 0) continue
+
+    // Reuse the Budget Planner's canonical category mapping for consistent totals.
+    const category = normalizeBudgetCategory(transaction.category)
+    if (!category) continue
+    const expense = Math.abs(amount)
+    categoryTotals[category] = (categoryTotals[category] ?? 0) + expense
+
+    // Invalid/missing dates still contribute to category totals, but not monthly trends.
+    const date = String(transaction.date ?? '')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      expensesWithoutValidDate += 1
+      continue
+    }
+    const parsedDate = new Date(`${date}T00:00:00Z`)
+    if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+      expensesWithoutValidDate += 1
+      continue
+    }
+
+    const month = date.slice(0, 7)
+    monthTotals[month] = (monthTotals[month] ?? 0) + expense
+  }
+
+  const categoriesBySpend = Object.entries(categoryTotals)
+    .sort(([categoryA, amountA], [categoryB, amountB]) => amountB - amountA || categoryA.localeCompare(categoryB))
+  const monthlySpending = Object.entries(monthTotals)
+    .sort(([monthA], [monthB]) => monthA.localeCompare(monthB))
+  const totalExpenses = categoriesBySpend.reduce((total, [, amount]) => total + amount, 0)
+
+  return {
+    categories: categoriesBySpend,
+    monthlySpending,
+    expensesWithoutValidDate,
+    totalExpenses,
+    topCategory: categoriesBySpend[0] ?? null,
+  }
+}
+
+function AnalysisPage({ uploadedData }) {
+  const insights = getExpenseInsights(uploadedData)
+  const topCategoryShare = insights.topCategory && insights.totalExpenses > 0
+    ? (insights.topCategory[1] / insights.totalExpenses) * 100
+    : 0
+
+  return (
+    <>
+      <PageHeader
+        title="Spending Insights"
+        subtitle="Explore expense categories and monthly changes based on your uploaded transactions."
+      />
+
+      {!uploadedData ? (
+        <section className="panel insights-empty-panel">
+          <EmptyState
+            title="No transaction data yet"
+            message="Upload a CSV statement to see category spending and monthly trends here."
+          />
+        </section>
+      ) : insights.totalExpenses === 0 ? (
+        <section className="panel insights-empty-panel">
+          <EmptyState
+            title="No expenses to analyze"
+            message="This upload has no negative expense transactions. Income is not included in spending insights."
+          />
+        </section>
+      ) : (
+        <>
+          <section className="summary-grid insights-summary-grid">
+            <SummaryCard title="Total Expenses" value={formatAmount(insights.totalExpenses)} note="Negative transactions only" icon="↘" />
+            <SummaryCard title="Highest-Spending Category" value={insights.topCategory[0]} note={`${formatAmount(insights.topCategory[1])} in expenses`} icon="▤" />
+            <SummaryCard title="Months with Dated Expenses" value={insights.monthlySpending.length} note="Used for the monthly trend" icon="▥" />
+          </section>
+
+          <section className="insights-grid">
+            <div className="panel insights-panel">
+              <div className="panel-title">
+                <h3>Expense Distribution</h3>
+                <span>{formatAmount(insights.totalExpenses)} total</span>
+              </div>
+              <p className="insights-caption">Share of expenses by normalized category. The largest category is highlighted.</p>
+              <CategorySpendingChart
+                categories={insights.categories}
+                totalExpenses={insights.totalExpenses}
+                topCategory={insights.topCategory[0]}
+              />
+            </div>
+
+            <div className="panel insights-panel">
+              <div className="panel-title"><h3>Monthly Spending Trend</h3></div>
+              {insights.monthlySpending.length >= 2 ? (
+                <>
+                  <MonthlySpendingChart months={insights.monthlySpending} />
+                  <p className="insights-observation" role="status">
+                    {describeMonthlyChange(insights.monthlySpending)}
+                  </p>
+                </>
+              ) : (
+                <EmptyState
+                  title="Not enough dated months"
+                  message="At least two distinct months with valid dated expenses are needed to show a spending trend."
+                />
+              )}
+              {insights.expensesWithoutValidDate > 0 && (
+                <p className="insights-date-note" role="note">
+                  {insights.expensesWithoutValidDate} expense transaction{insights.expensesWithoutValidDate === 1 ? ' has' : 's have'} missing or invalid dates. {insights.expensesWithoutValidDate === 1 ? 'It remains' : 'They remain'} included in category totals but are omitted from the monthly trend.
+                </p>
+              )}
+            </div>
+          </section>
+
+          <section className="panel insights-observations">
+            <h3>What stands out</h3>
+            <p role="status">
+              {insights.topCategory[0]} is your highest-spending category at {formatAmount(insights.topCategory[1])}
+              {' '}({topCategoryShare.toFixed(1)}% of recorded expenses).
+            </p>
+            <p className="muted-note">These observations are calculated from this session's uploaded transactions; no AI analysis is used.</p>
+          </section>
+        </>
+      )}
+    </>
+  )
+}
+
+function CategorySpendingChart({ categories: categoryEntries, totalExpenses, topCategory }) {
+  return (
+    <ol className="insights-category-chart" aria-label="Expense distribution by category">
+      {categoryEntries.map(([category, amount]) => {
+        const share = (amount / totalExpenses) * 100
+        const isTopCategory = category === topCategory
+        return (
+          <li className={`insights-category-row ${isTopCategory ? 'top-spending-category' : ''}`} key={category}>
+            <div className="insights-category-label">
+              <span>{category}{isTopCategory && <span className="top-category-badge">Highest</span>}</span>
+              <strong>{formatAmount(amount)} <small>({share.toFixed(1)}%)</small></strong>
+            </div>
+            <div
+              className="insights-category-track"
+              role="progressbar"
+              aria-label={`${category} share of expenses`}
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={Number(share.toFixed(1))}
+            >
+              <div className="insights-category-fill" style={{ width: `${share}%` }} />
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function MonthlySpendingChart({ months }) {
+  const highestMonthSpend = Math.max(...months.map(([, amount]) => amount))
+
+  return (
+    <ol className="monthly-spending-chart" aria-label="Monthly expenses">
+      {months.map(([month, amount]) => {
+        const share = highestMonthSpend > 0 ? (amount / highestMonthSpend) * 100 : 0
+        return (
+          <li className="monthly-spending-column" key={month}>
+            <strong>{formatAmount(amount)}</strong>
+            <div
+              className="monthly-spending-track"
+              role="progressbar"
+              aria-label={`${formatMonthLabel(month)} expenses`}
+              aria-valuemin="0"
+              aria-valuemax={highestMonthSpend}
+              aria-valuenow={amount}
+            >
+              <div className="monthly-spending-fill" style={{ height: `${share}%` }} />
+            </div>
+            <span>{formatMonthLabel(month)}</span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function describeMonthlyChange(months) {
+  const [firstMonth, firstAmount] = months[0]
+  const [lastMonth, lastAmount] = months[months.length - 1]
+  const difference = lastAmount - firstAmount
+  if (difference === 0) {
+    return `Spending was unchanged at ${formatAmount(lastAmount)} from ${formatMonthLabel(firstMonth)} to ${formatMonthLabel(lastMonth)}.`
+  }
+  if (firstAmount === 0) {
+    return `Spending increased from ${formatAmount(firstAmount)} in ${formatMonthLabel(firstMonth)} to ${formatAmount(lastAmount)} in ${formatMonthLabel(lastMonth)}.`
+  }
+
+  const changePercent = Math.abs((difference / firstAmount) * 100).toFixed(1)
+  const direction = difference > 0 ? 'increased' : 'decreased'
+  return `Spending ${direction} ${changePercent}% from ${formatAmount(firstAmount)} in ${formatMonthLabel(firstMonth)} to ${formatAmount(lastAmount)} in ${formatMonthLabel(lastMonth)}.`
+}
+
+function AnomalyDetectionPage({ uploadedData }) {
+  const analysis = findExpenseAnomalies(uploadedData)
+
+  return (
+    <>
+      <PageHeader
+        title="Anomaly Detection"
+        subtitle="Review expenses that are unusually large compared with this upload."
+      />
+      <p className="anomaly-method-note" role="note">
+        This local check considers only finite, negative expense amounts. It flags expenses above the median plus three median absolute deviations (MAD), and requires at least {MIN_ANOMALY_SAMPLE_SIZE} expenses. A flag means unusually large relative to this upload; it does not indicate fraud or misconduct.
+      </p>
+
+      {!uploadedData ? (
+        <section className="panel anomaly-empty-panel">
+          <EmptyState
+            title="No transaction data yet"
+            message="Upload a CSV statement to check for unusually large expenses."
+          />
+        </section>
+      ) : analysis.status === 'insufficient' ? (
+        <section className="panel anomaly-empty-panel">
+          <EmptyState
+            title="Not enough expenses to assess"
+            message={`At least ${MIN_ANOMALY_SAMPLE_SIZE} valid expense transactions are needed for this comparison. This upload has ${analysis.expenseCount}. No statistical conclusion is made.`}
+          />
+        </section>
+      ) : analysis.status === 'unassessable' ? (
+        <section className="panel anomaly-empty-panel">
+          <EmptyState
+            title="Expense pattern cannot be assessed reliably"
+            message={`The median absolute deviation is zero or does not produce a useful threshold across ${analysis.expenseCount} expenses. No anomalies are claimed.`}
+          />
+        </section>
+      ) : analysis.anomalies.length === 0 ? (
+        <section className="panel anomaly-empty-panel">
+          <EmptyState
+            title="No unusually large expenses found"
+            message={`None of the ${analysis.expenseCount} expenses exceeded the data-based threshold of ${formatAmount(analysis.threshold)}.`}
+          />
+        </section>
+      ) : (
+        <section className="panel anomaly-results" aria-labelledby="anomaly-results-heading">
+          <div className="panel-title anomaly-results-title">
+            <h3 id="anomaly-results-heading">Flagged expenses</h3>
+            <span>{analysis.anomalies.length} flagged</span>
+          </div>
+          <p className="anomaly-results-intro">
+            Threshold: {formatAmount(analysis.threshold)} · Median expense: {formatAmount(analysis.typicalExpense)} · MAD: {formatAmount(analysis.medianAbsoluteDeviation)}
+          </p>
+          <div className="anomaly-list">
+            {analysis.anomalies.map((anomaly, index) => (
+              <article className="anomaly-item" key={`${anomaly.date ?? 'no-date'}-${index}`}>
+                <div className="anomaly-item-heading">
+                  <h4>{anomaly.description}</h4>
+                  <strong>{formatAmount(anomaly.amount)}</strong>
+                </div>
+                <dl className="anomaly-details">
+                  <div><dt>Date</dt><dd>{anomaly.date ?? 'Date unavailable'}</dd></div>
+                  <div><dt>Category</dt><dd>{anomaly.category}</dd></div>
+                </dl>
+                <p className="anomaly-reason" role="status">
+                  This expense is above the {formatAmount(analysis.threshold)} threshold (median {formatAmount(analysis.typicalExpense)} + 3 × MAD {formatAmount(analysis.medianAbsoluteDeviation)}), so it is unusually large relative to this upload.
+                </p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {analysis.invalidAmountCount > 0 && (
+        <p className="anomaly-invalid-note" role="note">
+          {analysis.invalidAmountCount} transaction amount{analysis.invalidAmountCount === 1 ? ' was' : 's were'} missing or invalid and excluded from this check.
+        </p>
+      )}
+    </>
+  )
 }
 
 function BudgetPage({ uploadedData, categoryBudgets, setCategoryBudgets }) {

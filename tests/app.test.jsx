@@ -31,7 +31,24 @@ const sampleCategoryUploadResponse = {
   category_expenses: { Food: 1500, Transport: 800 },
 }
 
-async function openBudgetPlannerWithUpload(uploadResponse = budgetUploadResponse) {
+const anomalyUploadResponse = {
+  total_income: 100000,
+  total_expenses: 146,
+  net_balance: 99854,
+  transaction_count: 7,
+  transactions: [
+    { date: '2026-01-01', description: 'Small purchase', category: 'Food', amount: -10 },
+    { date: '2026-01-02', description: 'Bus fare', category: 'Transport', amount: -11 },
+    { date: '2026-01-03', description: 'Coffee', category: 'Food & Dining', amount: -12 },
+    { date: '2026-01-04', description: 'Book', category: 'Education', amount: -13 },
+    { date: '2026-01-05', description: 'Large appliance', category: 'Shopping', amount: -100 },
+    { date: '2026-01-06', description: 'Salary', category: 'Income', amount: 100000 },
+    { date: '2026-01-07', description: 'No charge', category: 'Food', amount: 0 },
+  ],
+  category_expenses: {},
+}
+
+async function openPageWithUpload(uploadResponse, pageName) {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     ok: true,
     json: async () => uploadResponse,
@@ -48,7 +65,19 @@ async function openBudgetPlannerWithUpload(uploadResponse = budgetUploadResponse
   })
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await screen.findByText('CSV processed successfully. Results are available for this session only.')
-  fireEvent.click(screen.getByRole('button', { name: /Budget Planner/ }))
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(pageName) }))
+}
+
+async function openBudgetPlannerWithUpload(uploadResponse = budgetUploadResponse) {
+  await openPageWithUpload(uploadResponse, 'Budget Planner')
+}
+
+async function openSpendingInsightsWithUpload(uploadResponse = budgetUploadResponse) {
+  await openPageWithUpload(uploadResponse, 'Spending Insights')
+}
+
+async function openAnomalyDetectionWithUpload(uploadResponse = anomalyUploadResponse) {
+  await openPageWithUpload(uploadResponse, 'Anomaly Detection')
 }
 
 describe('FinAdvisor app shell', () => {
@@ -288,5 +317,190 @@ describe('FinAdvisor app shell', () => {
     expect(within(screen.getByRole('heading', { name: 'Uncategorized' }).closest('.budget-comparison-row')).getByText('₹25.00')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Pet Grooming' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Income' })).not.toBeInTheDocument()
+  })
+
+  it('shows expense-only category totals, shares, and highest category using canonical aliases', async () => {
+    await openSpendingInsightsWithUpload(sampleCategoryUploadResponse)
+
+    expect(screen.getByRole('heading', { name: 'Spending Insights' })).toBeInTheDocument()
+    expect(screen.getByText('Total Expenses')).toBeInTheDocument()
+    expect(screen.getByText('₹2300.00')).toBeInTheDocument()
+    expect(screen.getByText('Highest-Spending Category')).toBeInTheDocument()
+    expect(screen.getByText('Food & Dining is your highest-spending category at ₹1500.00 (65.2% of recorded expenses).')).toBeInTheDocument()
+
+    const categoryChart = screen.getByRole('list', { name: 'Expense distribution by category' })
+    expect(within(categoryChart).getByText('Food & Dining')).toBeInTheDocument()
+    expect(within(categoryChart).getByText('Transportation')).toBeInTheDocument()
+    expect(within(categoryChart).getByText('(65.2%)')).toBeInTheDocument()
+    expect(within(categoryChart).getByText('(34.8%)')).toBeInTheDocument()
+    expect(within(categoryChart).getByText('Highest')).toBeInTheDocument()
+    expect(within(categoryChart).queryByText('Income')).not.toBeInTheDocument()
+  })
+
+  it('shows monthly expenses only for valid dated months and explains excluded dates', async () => {
+    const datedAndUndatedUpload = {
+      ...sampleCategoryUploadResponse,
+      transactions: [
+        { date: '2026-01-05', description: 'Food', category: 'Food', amount: -100 },
+        { date: '2026-02-07', description: 'Groceries', category: 'Groceries', amount: -200 },
+        { date: '', description: 'Undated shopping', category: 'Shopping', amount: -50 },
+        { date: 'not-a-date', description: 'Invalid date', category: 'Traveling', amount: -25 },
+        { date: '2026-02-30', description: 'Impossible date', category: 'Trips', amount: -25 },
+        { date: '2026-02-10', description: 'Income', category: 'Income', amount: 5000 },
+      ],
+    }
+    await openSpendingInsightsWithUpload(datedAndUndatedUpload)
+
+    const monthlyChart = screen.getByRole('list', { name: 'Monthly expenses' })
+    expect(within(monthlyChart).getByRole('progressbar', { name: 'January 2026 expenses' })).toHaveAttribute('aria-valuenow', '100')
+    expect(within(monthlyChart).getByRole('progressbar', { name: 'February 2026 expenses' })).toHaveAttribute('aria-valuenow', '200')
+    expect(within(monthlyChart).queryByText('March 2026')).not.toBeInTheDocument()
+    expect(screen.getByText(/Spending increased 100.0% from ₹100.00 in January 2026 to ₹200.00 in February 2026\./)).toBeInTheDocument()
+    expect(screen.getByText('Shopping')).toBeInTheDocument()
+    expect(screen.getByText('Travel')).toBeInTheDocument()
+    expect(screen.getByRole('note')).toHaveTextContent('3 expense transactions have missing or invalid dates.')
+    expect(screen.getByRole('note')).toHaveTextContent('They remain included in category totals but are omitted from the monthly trend.')
+  })
+
+  it('explains insufficient monthly trend data and still includes undated expense totals', async () => {
+    const oneDatedMonthUpload = {
+      ...sampleCategoryUploadResponse,
+      transactions: [
+        { date: '2026-01-05', description: 'Food', category: 'Food', amount: -100 },
+        { date: '', description: 'Undated food', category: 'Food & Dining', amount: -50 },
+        { date: 'not-a-date', description: 'Invalid date', category: 'Groceries', amount: -25 },
+      ],
+    }
+    await openSpendingInsightsWithUpload(oneDatedMonthUpload)
+
+    expect(screen.getByText('Not enough dated months')).toBeInTheDocument()
+    expect(screen.getByText(/At least two distinct months with valid dated expenses are needed/i)).toBeInTheDocument()
+    const foodRows = screen.getAllByText('Food & Dining')
+    expect(foodRows.length).toBeGreaterThan(0)
+    expect(screen.getAllByText('₹175.00').length).toBeGreaterThan(0)
+  })
+
+  it('shows helpful empty states with no upload and with income-only data', async () => {
+    const { unmount } = render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Get Started' }))
+    fireEvent.change(screen.getByPlaceholderText('Enter your email'), { target: { value: 'demo@example.com' } })
+    fireEvent.change(screen.getByPlaceholderText('Enter your password'), { target: { value: 'demo-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+    fireEvent.click(screen.getByRole('button', { name: /Spending Insights/ }))
+
+    expect(screen.getByText('No transaction data yet')).toBeInTheDocument()
+    unmount()
+
+    await openSpendingInsightsWithUpload({
+      ...sampleCategoryUploadResponse,
+      transactions: [
+        { date: '2026-01-01', description: 'Salary', category: 'Income', amount: 30000 },
+        { date: '2026-01-02', description: 'Savings', category: 'Savings & Investments', amount: 5000 },
+      ],
+    })
+    expect(screen.getByText('No expenses to analyze')).toBeInTheDocument()
+    expect(screen.getByText(/Income is not included in spending insights/i)).toBeInTheDocument()
+  })
+
+  it('flags an unusually large expense and explains the upload-relative threshold', async () => {
+    await openAnomalyDetectionWithUpload()
+
+    expect(screen.getByRole('heading', { name: 'Anomaly Detection' })).toBeInTheDocument()
+    expect(screen.getByText('Large appliance')).toBeInTheDocument()
+    expect(screen.getByText('2026-01-05')).toBeInTheDocument()
+    expect(screen.getByText('Shopping')).toBeInTheDocument()
+    expect(screen.getByText('₹100.00')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/unusually large relative to this upload/i)
+    expect(screen.getByText(/Threshold: ₹15.00 · Median expense: ₹12.00 · MAD: ₹1.00/)).toBeInTheDocument()
+    expect(screen.getByRole('note')).toHaveTextContent(/does not indicate fraud or misconduct/i)
+  })
+
+  it('excludes positive income, zero amounts, and invalid amounts from anomaly sampling', async () => {
+    await openAnomalyDetectionWithUpload({
+      ...anomalyUploadResponse,
+      transactions: [
+        ...anomalyUploadResponse.transactions,
+        { date: '2026-01-08', description: 'Bonus', category: 'Income', amount: 999999 },
+        { date: '2026-01-09', description: 'Invalid amount', category: 'Shopping', amount: 'not-a-number' },
+      ],
+    })
+
+    expect(screen.getByText('Large appliance')).toBeInTheDocument()
+    expect(screen.queryByText('Bonus')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('note').some(note => note.textContent.includes('1 transaction amount was missing or invalid and excluded from this check.'))).toBe(true)
+    expect(screen.getByText(/requires at least 5 expenses/i)).toBeInTheDocument()
+  })
+
+  it('shows an insufficient-data state below the documented minimum sample size', async () => {
+    await openAnomalyDetectionWithUpload({
+      ...anomalyUploadResponse,
+      transactions: anomalyUploadResponse.transactions.slice(0, 4),
+    })
+
+    expect(screen.getByText('Not enough expenses to assess')).toBeInTheDocument()
+    expect(screen.getByText(/At least 5 valid expense transactions are needed/i)).toBeInTheDocument()
+    expect(screen.getByText(/No statistical conclusion is made/i)).toBeInTheDocument()
+  })
+
+  it('reports zero-MAD expense data as unassessable rather than anomaly-free', async () => {
+    const zeroMadTransactions = Array.from({ length: 5 }, (_, index) => ({
+      date: `2026-01-0${index + 1}`,
+      description: `Same cost ${index + 1}`,
+      category: 'Food',
+      amount: -20,
+    }))
+    await openAnomalyDetectionWithUpload({ ...anomalyUploadResponse, transactions: zeroMadTransactions })
+
+    expect(screen.getByText('Expense pattern cannot be assessed reliably')).toBeInTheDocument()
+    expect(screen.getByText(/median absolute deviation is zero/i)).toBeInTheDocument()
+    expect(screen.getByText(/No anomalies are claimed/i)).toBeInTheDocument()
+    expect(screen.queryByText('No unusually large expenses found')).not.toBeInTheDocument()
+  })
+
+  it('shows no-upload and assessed-with-no-anomalies empty states', async () => {
+    const { unmount } = render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Get Started' }))
+    fireEvent.change(screen.getByPlaceholderText('Enter your email'), { target: { value: 'demo@example.com' } })
+    fireEvent.change(screen.getByPlaceholderText('Enter your password'), { target: { value: 'demo-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+    fireEvent.click(screen.getByRole('button', { name: /Anomaly Detection/ }))
+    expect(screen.getByText('No transaction data yet')).toBeInTheDocument()
+    unmount()
+
+    await openAnomalyDetectionWithUpload({
+      ...anomalyUploadResponse,
+      transactions: [
+        { date: '2026-01-01', description: 'Expense A', category: 'Food', amount: -10 },
+        { date: '2026-01-02', description: 'Expense B', category: 'Food', amount: -11 },
+        { date: '2026-01-03', description: 'Expense C', category: 'Food', amount: -12 },
+        { date: '2026-01-04', description: 'Expense D', category: 'Food', amount: -13 },
+        { date: '2026-01-05', description: 'Expense E', category: 'Food', amount: -14 },
+      ],
+    })
+    expect(screen.getByText('No unusually large expenses found')).toBeInTheDocument()
+    expect(screen.getByText(/None of the 5 expenses exceeded the data-based threshold of ₹15.00/i)).toBeInTheDocument()
+  })
+
+  it('handles missing descriptions and invalid or missing dates without changing uploaded rows', async () => {
+    const transactionsWithMissingDetails = [
+      { date: '2026-01-01', description: 'Routine 1', category: 'Food', amount: -10 },
+      { date: '2026-01-02', description: 'Routine 2', category: 'Food', amount: -11 },
+      { date: '2026-01-03', description: 'Routine 3', category: 'Food', amount: -12 },
+      { date: '2026-01-04', description: 'Routine 4', category: 'Food', amount: -13 },
+      { date: 'not-a-date', description: '   ', category: 'Food', amount: -100 },
+      { date: '', description: 'Bad amount', category: 'Food', amount: 'NaN' },
+      { date: '2026-01-06', description: 'No amount' },
+    ]
+    await openAnomalyDetectionWithUpload({ ...anomalyUploadResponse, transactions: transactionsWithMissingDetails })
+
+    expect(screen.getByText('Description unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Date unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Food & Dining')).toBeInTheDocument()
+    expect(screen.getAllByRole('note').some(note => note.textContent.includes('2 transaction amounts were missing or invalid and excluded from this check.'))).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: /Dashboard/ }))
+    const transactionTable = screen.getByRole('table')
+    expect(within(transactionTable).getByText('not-a-date')).toBeInTheDocument()
+    expect(within(transactionTable).getAllByText('₹NaN')).toHaveLength(2)
   })
 })
