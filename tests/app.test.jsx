@@ -80,6 +80,15 @@ async function openAnomalyDetectionWithUpload(uploadResponse = anomalyUploadResp
   await openPageWithUpload(uploadResponse, 'Anomaly Detection')
 }
 
+async function openFinancialAssistantWithUpload(uploadResponse = sampleCategoryUploadResponse) {
+  await openPageWithUpload(uploadResponse, 'AI Financial Assistant')
+}
+
+function submitAssistantQuestion(question) {
+  fireEvent.change(screen.getByLabelText('Your question'), { target: { value: question } })
+  fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+}
+
 describe('FinAdvisor app shell', () => {
   it('renders the landing page and opens the demo login', () => {
     render(<App />)
@@ -502,5 +511,112 @@ describe('FinAdvisor app shell', () => {
     const transactionTable = screen.getByRole('table')
     expect(within(transactionTable).getByText('not-a-date')).toBeInTheDocument()
     expect(within(transactionTable).getAllByText('₹NaN')).toHaveLength(2)
+  })
+
+  it('answers largest-expense questions from negative transaction records', async () => {
+    await openFinancialAssistantWithUpload(anomalyUploadResponse)
+
+    submitAssistantQuestion('What was my largest expense?')
+
+    expect(screen.getAllByText('What was my largest expense?').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText(/Your largest expense was Large appliance at ₹100\.00\./)).toBeInTheDocument()
+    expect(screen.getByText(/Date: 2026-01-05\./)).toBeInTheDocument()
+  })
+
+  it('answers canonical category spending questions and excludes income', async () => {
+    await openFinancialAssistantWithUpload(sampleCategoryUploadResponse)
+
+    submitAssistantQuestion('How much did I spend on food?')
+
+    expect(screen.getByText(/Your recorded spending in Food & Dining is ₹1500\.00 across 1 expense transaction/)).toBeInTheDocument()
+    expect(screen.queryByText(/35000/)).not.toBeInTheDocument()
+  })
+
+  it('answers monthly income, expense, and net balance from valid dated records', async () => {
+    const monthlyRecords = {
+      ...sampleCategoryUploadResponse,
+      transactions: [
+        { date: '2026-01-02', description: 'Pay', category: 'Income', amount: 3000 },
+        { date: '2026-01-03', description: 'Food shop', category: 'Food', amount: -700 },
+        { date: '2026-02-02', description: 'Other pay', category: 'Income', amount: 10000 },
+        { date: '2026-02-03', description: 'Bus', category: 'Transport', amount: -400 },
+        { date: '', description: 'Undated expense', category: 'Food', amount: -50 },
+        { date: '2026-01-04', description: 'Invalid amount', category: 'Food', amount: 'bad' },
+      ],
+    }
+    await openFinancialAssistantWithUpload(monthlyRecords)
+
+    submitAssistantQuestion('What were my total income, expenses, and net balance for January 2026?')
+
+    expect(screen.getByText(/Recorded totals for January 2026: income ₹3000\.00, expenses ₹700\.00, and net balance ₹2300\.00\./)).toBeInTheDocument()
+    expect(screen.getByText(/1 invalid amount record\(s\) were excluded/)).toBeInTheDocument()
+    expect(screen.getByText(/1 record\(s\) with missing or invalid dates were excluded from this month/)).toBeInTheDocument()
+  })
+
+  it('answers overall totals and ISO month questions using actual records', async () => {
+    await openFinancialAssistantWithUpload()
+
+    submitAssistantQuestion('What are my total income, expenses, and net balance across all transactions?')
+    expect(screen.getByText(/Recorded totals across all uploaded transactions: income ₹35000\.00, expenses ₹2300\.00, and net balance ₹32700\.00\./)).toBeInTheDocument()
+
+    submitAssistantQuestion('What were my total income, expenses, and net balance for 2026-01?')
+    expect(screen.getByText(/Recorded totals for January 2026: income ₹35000\.00, expenses ₹2300\.00, and net balance ₹32700\.00\./)).toBeInTheDocument()
+  })
+
+  it('asks for a CSV when no data is uploaded', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Get Started' }))
+    fireEvent.change(screen.getByPlaceholderText('Enter your email'), { target: { value: 'demo@example.com' } })
+    fireEvent.change(screen.getByPlaceholderText('Enter your password'), { target: { value: 'demo-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+    fireEvent.click(screen.getByRole('button', { name: /AI Financial Assistant/ }))
+
+    expect(screen.getByRole('status')).toHaveTextContent('Upload a CSV statement first.')
+    submitAssistantQuestion('What was my largest expense?')
+    expect(screen.getByText(/Please upload a CSV statement first/)).toBeInTheDocument()
+    expect(screen.getByText(/No transaction data is sent to an external AI provider/)).toBeInTheDocument()
+  })
+
+  it('clarifies ambiguous months and unsupported questions', async () => {
+    await openFinancialAssistantWithUpload()
+
+    submitAssistantQuestion('What were my totals this month?')
+    expect(screen.getByText(/Which month and year should I use/)).toBeInTheDocument()
+
+    submitAssistantQuestion('How should I invest my money?')
+    expect(screen.getByText(/I can answer questions about your largest expense/)).toBeInTheDocument()
+  })
+
+  it('does not invent category or month values absent from the records', async () => {
+    await openFinancialAssistantWithUpload()
+
+    submitAssistantQuestion('How much did I spend on healthcare?')
+    expect(screen.getByText(/Which expense category do you mean/)).toBeInTheDocument()
+
+    submitAssistantQuestion('What were my income, expenses, and balance for December 2025?')
+    expect(screen.getByText(/I could not find transactions with valid dates for December 2025/)).toBeInTheDocument()
+  })
+
+  it('handles invalid amounts and missing or invalid dates without crashing or claiming unsupported facts', async () => {
+    const incompleteRecords = {
+      ...sampleCategoryUploadResponse,
+      transactions: [
+        { date: 'not-a-date', description: '', category: 'Food', amount: -100 },
+        { date: '', description: 'Bad amount', category: 'Food', amount: 'not-a-number' },
+        { description: 'Missing amount', category: 'Food' },
+      ],
+    }
+    await openFinancialAssistantWithUpload(incompleteRecords)
+
+    submitAssistantQuestion('What was my largest expense?')
+    expect(screen.getByText(/Description unavailable at ₹100\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/A valid date was not available/)).toBeInTheDocument()
+
+    submitAssistantQuestion('What were my total income, expenses, and net balance for January 2026?')
+    expect(screen.getByText(/I could not find transactions with valid dates for January 2026/)).toBeInTheDocument()
+
+    submitAssistantQuestion('What are my total income, expenses, and net balance across all transactions?')
+    expect(screen.getByText(/Recorded totals across all uploaded transactions: income ₹0\.00, expenses ₹100\.00, and net balance −₹100\.00\./)).toBeInTheDocument()
+    expect(screen.getByText(/2 invalid amount record\(s\) were excluded/)).toBeInTheDocument()
   })
 })

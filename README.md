@@ -52,5 +52,10 @@ python -m pytest backend\tests
 - `FinAdvisor-App.css` remains the stylesheet for the existing light-and-purple interface.
 - `backend/app/main.py` contains the FastAPI app and health endpoint.
 - CSV uploads are validated and summarized in memory. The API returns aggregate income, expense, balance, and count values, individual transaction rows, and expense totals by category. The React app keeps the latest upload response in `App` state for the current session so it remains available while navigating between pages; neither the backend nor a database persists it.
+- The AI Financial Assistant is a local, deterministic question-and-answer interface. It calculates largest expenses, spending by normalized category, and income/expense/net totals for a specified month or all uploaded transactions from session-held transaction records. It does not use a generative AI model or send transaction data to an external AI provider. Questions that are unsupported or cannot be answered from valid uploaded data receive a clarification or limitation message.
+
+### AI Financial Assistant privacy and supported questions
+
+Despite its product name, the assistant is rule-based and runs in the frontend; no transaction records are sent to a hosted model, external AI service, or new backend endpoint. It can answer questions about the largest expense, spending for a recognized category, income/expenses/net balance for a month specified as `January 2026` or `2026-01`, and the same totals across all uploaded transactions. It uses valid transaction amounts, considers negative values expenses and positive values income, and normalizes category aliases using the Budget Planner's mapping. Monthly totals use valid dated records only. Missing or invalid amounts and dates are excluded where needed and disclosed; unsupported questions, unknown categories, or months with no dated records receive a clarification or limitation rather than an invented figure. This is a session-only convenience, not professional financial advice.
 
 This application is an educational project, not professional financial advice. No bank credentials or external API keys are requested in this phase.

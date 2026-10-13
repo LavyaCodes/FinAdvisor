@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import './FinAdvisor-App.css'
 
-const pages = ['Dashboard', 'Upload Data', 'Spending Insights', 'Anomaly Detection', 'Budget Planner', 'Settings']
+const pages = ['Dashboard', 'Upload Data', 'Spending Insights', 'Anomaly Detection', 'AI Financial Assistant', 'Budget Planner', 'Settings']
 const budgetCategories = [
   'Food & Dining', 'Shopping', 'Transportation', 'Education', 'Entertainment',
   'Housing & Rent', 'Bills & Utilities', 'Health & Medical', 'Travel', 'Family',
@@ -134,6 +134,164 @@ function findExpenseAnomalies(uploadedData) {
   }
 }
 
+function readTransactionAmount(transaction) {
+  const rawAmount = transaction?.amount
+  if (typeof rawAmount === 'number') return Number.isFinite(rawAmount) ? rawAmount : null
+  if (typeof rawAmount === 'string' && rawAmount.trim() !== '') {
+    const amount = Number(rawAmount)
+    return Number.isFinite(amount) ? amount : null
+  }
+  return null
+}
+
+function findQuestionCategory(question) {
+  const questionKey = categoryKey(question)
+  const knownNames = [
+    ...Object.keys(categoryAliases),
+    ...Object.keys(canonicalCategoryByKey),
+  ].sort((first, second) => second.length - first.length)
+
+  for (const name of knownNames) {
+    if (` ${questionKey} `.includes(` ${name} `)) {
+      return normalizeBudgetCategory(name)
+    }
+  }
+  return null
+}
+
+function parseQuestionMonth(question) {
+  const yearMonth = question.match(/\b(\d{4})-(0[1-9]|1[0-2])\b/)
+  if (yearMonth) return `${yearMonth[1]}-${yearMonth[2]}`
+
+  const monthNames = [
+    ['january', 'jan'], ['february', 'feb'], ['march', 'mar'], ['april', 'apr'],
+    ['may'], ['june', 'jun'], ['july', 'jul'], ['august', 'aug'],
+    ['september', 'sep', 'sept'], ['october', 'oct'], ['november', 'nov'], ['december', 'dec'],
+  ]
+  const normalizedQuestion = categoryKey(question)
+  for (let monthIndex = 0; monthIndex < monthNames.length; monthIndex += 1) {
+    for (const monthName of monthNames[monthIndex]) {
+      const match = normalizedQuestion.match(new RegExp(`\\b${monthName}\\s+(\\d{4})\\b`))
+      if (match) return `${match[1]}-${String(monthIndex + 1).padStart(2, '0')}`
+      if (new RegExp(`\\b${monthName}\\b`).test(normalizedQuestion)) return 'missing-year'
+    }
+  }
+  return null
+}
+
+function answerTransactionQuestion(question, uploadedData) {
+  if (!uploadedData || !Array.isArray(uploadedData.transactions)) {
+    return 'Please upload a CSV statement first. The assistant can answer using transactions available in this session.'
+  }
+
+  const transactions = uploadedData.transactions
+  const validRecords = []
+  const invalidAmountRecords = []
+  let invalidAmountCount = 0
+  for (const transaction of transactions) {
+    const amount = readTransactionAmount(transaction)
+    if (amount === null) {
+      invalidAmountCount += 1
+      invalidAmountRecords.push(transaction)
+      continue
+    }
+    validRecords.push({ transaction, amount })
+  }
+
+  const normalizedQuestion = categoryKey(question)
+  const asksLargest = /\b(largest|biggest|highest)\b/.test(normalizedQuestion)
+    && /\b(expense|spend|spending|purchase|transaction)\b/.test(normalizedQuestion)
+  const asksCategorySpend = /\b(spend|spent|spending|expense|expenses)\b/.test(normalizedQuestion)
+    && /\b(how much|total|what|show|tell)\b/.test(normalizedQuestion)
+  const asksMonthly = /\b(month|monthly|january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|\d{4}\s+\d{2})\b/.test(normalizedQuestion)
+  const asksIncome = /\b(income|earned|earnings)\b/.test(normalizedQuestion)
+  const asksExpense = /\b(expense|expenses|spending|spent)\b/.test(normalizedQuestion)
+  const asksNet = /\b(net|balance)\b/.test(normalizedQuestion)
+  const month = parseQuestionMonth(question)
+
+  if (asksLargest) {
+    if (validRecords.length === 0 && invalidAmountCount > 0) {
+      return `I cannot identify the largest expense because all ${invalidAmountCount} transaction amount(s) in this upload are missing or invalid.`
+    }
+    const expenses = validRecords.filter(record => record.amount < 0)
+    if (expenses.length === 0) return 'I could not find any valid expense transactions in this upload.'
+    const largestAmount = Math.max(...expenses.map(record => Math.abs(record.amount)))
+    const largestTransactions = expenses.filter(record => Math.abs(record.amount) === largestAmount)
+    const descriptions = largestTransactions.map(({ transaction }) => (
+      typeof transaction.description === 'string' && transaction.description.trim()
+        ? transaction.description.trim()
+        : 'Description unavailable'
+    ))
+    const dates = largestTransactions.map(({ transaction }) => (
+      isValidTransactionDate(transaction.date) ? transaction.date : null
+    ))
+    const dateText = dates.some(Boolean) ? ` Date: ${dates.filter(Boolean).join(', ')}.` : ' A valid date was not available.'
+    const invalidNote = invalidAmountCount ? ` ${invalidAmountCount} record(s) with invalid amounts were excluded.` : ''
+    return `Your largest expense${largestTransactions.length > 1 ? 's were' : ' was'} ${descriptions.join(', ')} at ${formatAmount(largestAmount)}.${dateText}${invalidNote}`
+  }
+
+  if (asksCategorySpend && !asksMonthly && !asksIncome && !asksNet) {
+    const category = findQuestionCategory(question)
+    if (!category) return 'Which expense category do you mean? Try a category such as Food & Dining, Transportation, or Travel.'
+    const expenses = validRecords.filter(record => record.amount < 0
+      && normalizeBudgetCategory(record.transaction.category) === category)
+    if (expenses.length === 0) return `I could not find valid expenses for ${category} in this upload.`
+    const total = expenses.reduce((sum, record) => sum + Math.abs(record.amount), 0)
+    const invalidNote = invalidAmountCount ? ` ${invalidAmountCount} record(s) with invalid amounts were excluded.` : ''
+    return `Your recorded spending in ${category} is ${formatAmount(total)} across ${expenses.length} expense transaction(s).${invalidNote}`
+  }
+
+  if (asksCategorySpend && asksMonthly && !asksIncome && !asksNet) {
+    return 'I can total a category across the uploaded transactions, or overall income, expenses, and balance for a month. Monthly category totals are not available in this assistant yet.'
+  }
+
+  if (asksMonthly || asksIncome || asksNet || (asksExpense && /\b(total|all|overall)\b/.test(normalizedQuestion))) {
+    if (asksMonthly && !month) {
+      return 'Which month and year should I use? Please specify both, for example “January 2026” or “2026-01”.'
+    }
+    if (month === 'missing-year') {
+      return 'Which year should I use for that month? Please specify the month and year, for example “January 2026”.'
+    }
+    const datedRecordsInMonth = month
+      ? transactions.filter(transaction => isValidTransactionDate(transaction?.date)
+        && transaction.date.slice(0, 7) === month)
+      : []
+    const invalidAmountsInMonth = month
+      ? invalidAmountRecords.filter(transaction => isValidTransactionDate(transaction?.date)
+        && transaction.date.slice(0, 7) === month).length
+      : invalidAmountCount
+    const scopedRecords = month
+      ? validRecords.filter(({ transaction }) => isValidTransactionDate(transaction.date)
+        && transaction.date.slice(0, 7) === month)
+      : validRecords
+    if (!month && scopedRecords.length === 0 && invalidAmountCount > 0) {
+      return `I cannot calculate overall totals because all ${invalidAmountCount} transaction amount(s) in this upload are missing or invalid.`
+    }
+    if (month && datedRecordsInMonth.length === 0) {
+      return `I could not find transactions with valid dates for ${formatMonthLabel(month)}. I cannot determine that month's totals from this upload.`
+    }
+    if (month && scopedRecords.length === 0 && invalidAmountsInMonth > 0) {
+      return `I cannot calculate totals for ${formatMonthLabel(month)} because all ${invalidAmountsInMonth} dated transaction amount(s) for that month are missing or invalid.`
+    }
+    if (month && scopedRecords.length === 0) {
+      return `I could not find transactions with valid dates for ${formatMonthLabel(month)}. I cannot determine that month's totals from this upload.`
+    }
+    const income = scopedRecords.reduce((sum, record) => sum + (record.amount > 0 ? record.amount : 0), 0)
+    const expenses = scopedRecords.reduce((sum, record) => sum + (record.amount < 0 ? Math.abs(record.amount) : 0), 0)
+    const balance = income - expenses
+    const scopeLabel = month ? ` for ${formatMonthLabel(month)}` : ' across all uploaded transactions'
+    const invalidDateCount = month
+      ? validRecords.filter(({ transaction }) => !isValidTransactionDate(transaction.date)).length
+      : 0
+    const notes = []
+    if (invalidAmountsInMonth) notes.push(`${invalidAmountsInMonth} invalid amount record(s) were excluded`)
+    if (invalidDateCount) notes.push(`${invalidDateCount} record(s) with missing or invalid dates were excluded from this month`)
+    return `Recorded totals${scopeLabel}: income ${formatAmount(income)}, expenses ${formatAmount(expenses)}, and net balance ${formatAmount(balance)}.${notes.length ? ` ${notes.join('; ')}.` : ''}`
+  }
+
+  return 'I can answer questions about your largest expense, spending in a category, or income, expenses, and net balance for a specified month or all uploaded transactions. Please rephrase your question using one of those topics.'
+}
+
 function App() {
   const [screen, setScreen] = useState('landing')
   const [activePage, setActivePage] = useState('Dashboard')
@@ -156,6 +314,7 @@ function App() {
         {activePage === 'Upload Data' && <UploadPage selectedFile={selectedFile} setSelectedFile={setSelectedFile} uploadedData={uploadedData} setUploadedData={setUploadedData} />}
         {activePage === 'Spending Insights' && <AnalysisPage uploadedData={uploadedData} />}
         {activePage === 'Anomaly Detection' && <AnomalyDetectionPage uploadedData={uploadedData} />}
+        {activePage === 'AI Financial Assistant' && <FinancialAssistantPage uploadedData={uploadedData} />}
         {activePage === 'Budget Planner' && <BudgetPage uploadedData={uploadedData} categoryBudgets={categoryBudgets} setCategoryBudgets={setCategoryBudgets} />}
         {activePage === 'Settings' && <SettingsPage settings={settings} setSettings={setSettings} />}
       </main>
@@ -180,7 +339,7 @@ function LoginPage({ onBack, onLogin }) {
 }
 
 function Sidebar({ activePage, onNavigate, onLogout }) {
-  return <aside className="sidebar"><div className="brand"><div className="brand-icon">F</div><strong>FinAdvisor</strong></div><nav className="sidebar-nav">{pages.map((page, i) => <button key={page} className={`option-button ${activePage === page ? 'active' : ''}`} onClick={() => onNavigate(page)}><span>{['▦', '⇧', '◉', '!', '◫', '⚙'][i]}</span>{page}</button>)}</nav><div className="user-card"><div className="user-avatar">U</div><div><strong>User</strong><small>Personal Finance</small></div></div><button className="option-button logout-button" onClick={onLogout}>↪ Log out</button></aside>
+  return <aside className="sidebar"><div className="brand"><div className="brand-icon">F</div><strong>FinAdvisor</strong></div><nav className="sidebar-nav">{pages.map((page, i) => <button key={page} className={`option-button ${activePage === page ? 'active' : ''}`} onClick={() => onNavigate(page)}><span>{['▦', '⇧', '◉', '!', '✦', '◫', '⚙'][i]}</span>{page}</button>)}</nav><div className="user-card"><div className="user-avatar">U</div><div><strong>User</strong><small>Personal Finance</small></div></div><button className="option-button logout-button" onClick={onLogout}>↪ Log out</button></aside>
 }
 
 function PageHeader({ title, subtitle, action }) { return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header> }
@@ -732,6 +891,107 @@ function AnomalyDetectionPage({ uploadedData }) {
           {analysis.invalidAmountCount} transaction amount{analysis.invalidAmountCount === 1 ? ' was' : 's were'} missing or invalid and excluded from this check.
         </p>
       )}
+    </>
+  )
+}
+
+const assistantSuggestions = [
+  'What was my largest expense?',
+  'How much did I spend on food?',
+  'What were my total income, expenses, and net balance for January 2026?',
+  'What are my total income, expenses, and net balance across all transactions?',
+]
+
+function FinancialAssistantPage({ uploadedData }) {
+  const [question, setQuestion] = useState('')
+  const [conversation, setConversation] = useState([])
+
+  const askQuestion = (submittedQuestion) => {
+    const cleanedQuestion = submittedQuestion.trim()
+    if (!cleanedQuestion) return
+    const answer = answerTransactionQuestion(cleanedQuestion, uploadedData)
+    setConversation(currentConversation => [
+      ...currentConversation,
+      { question: cleanedQuestion, answer },
+    ])
+    setQuestion('')
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="AI Financial Assistant"
+        subtitle="Ask questions about the transactions you uploaded in this session."
+      />
+
+      <section className="panel assistant-panel" aria-labelledby="assistant-panel-heading">
+        <div className="assistant-local-banner" role="note">
+          <strong>Local, rule-based assistant</strong>
+          <span>Answers are calculated from your session data. No transaction data is sent to an external AI provider; no generative AI model is used.</span>
+        </div>
+
+        {!uploadedData && (
+          <div className="assistant-upload-prompt" role="status">
+            Upload a CSV statement first. Your transaction data will stay in this browser session.
+          </div>
+        )}
+
+        <div className="assistant-suggestions" aria-label="Suggested questions">
+          {assistantSuggestions.map(suggestion => (
+            <button
+              className="assistant-suggestion"
+              key={suggestion}
+              type="button"
+              onClick={() => askQuestion(suggestion)}
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+
+        <div className="assistant-conversation" aria-label="Assistant conversation" aria-live="polite">
+          {conversation.length === 0 ? (
+            <div className="assistant-welcome" id="assistant-panel-heading">
+              <h3>What would you like to know?</h3>
+              <p>Ask about an expense, a normalized category, or totals for a month or all uploaded transactions.</p>
+            </div>
+          ) : conversation.map((entry, index) => (
+            <div className="assistant-exchange" key={`${index}-${entry.question}`}>
+              <div className="assistant-message assistant-question">
+                <span className="assistant-message-label">You</span>
+                <p>{entry.question}</p>
+              </div>
+              <div className="assistant-message assistant-answer">
+                <span className="assistant-message-label">FinAdvisor · calculated from transactions</span>
+                <p>{entry.answer}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <form
+          className="assistant-question-form"
+          onSubmit={event => {
+            event.preventDefault()
+            askQuestion(question)
+          }}
+        >
+          <label htmlFor="assistantQuestion">Your question</label>
+          <div className="assistant-input-row">
+            <input
+              id="assistantQuestion"
+              type="text"
+              value={question}
+              onChange={event => setQuestion(event.target.value)}
+              placeholder="e.g. How much did I spend on food?"
+              autoComplete="off"
+            />
+            <button className="primary-button" type="submit" disabled={!question.trim()}>
+              Ask
+            </button>
+          </div>
+        </form>
+      </section>
     </>
   )
 }
