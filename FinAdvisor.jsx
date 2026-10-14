@@ -134,6 +134,15 @@ function findExpenseAnomalies(uploadedData) {
   }
 }
 
+function getFiniteExpenseTransactions(uploadedData) {
+  const transactions = Array.isArray(uploadedData?.transactions) ? uploadedData.transactions : []
+  return transactions.flatMap(transaction => {
+    const amount = readTransactionAmount(transaction)
+    if (amount === null || amount >= 0) return []
+    return [{ transaction, amount: Math.abs(amount) }]
+  })
+}
+
 function readTransactionAmount(transaction) {
   const rawAmount = transaction?.amount
   if (typeof rawAmount === 'number') return Number.isFinite(rawAmount) ? rawAmount : null
@@ -891,7 +900,98 @@ function AnomalyDetectionPage({ uploadedData }) {
           {analysis.invalidAmountCount} transaction amount{analysis.invalidAmountCount === 1 ? ' was' : 's were'} missing or invalid and excluded from this check.
         </p>
       )}
+
+      <IsolationForestPanel uploadedData={uploadedData} />
     </>
+  )
+}
+
+function IsolationForestPanel({ uploadedData }) {
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [flaggedTransactions, setFlaggedTransactions] = useState(null)
+  const expenses = getFiniteExpenseTransactions(uploadedData)
+
+  const runModel = async () => {
+    setIsLoading(true)
+    setError('')
+    setFlaggedTransactions(null)
+
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+      const response = await fetch(`${apiUrl}/transactions/anomaly/isolation-forest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Send only the one numeric feature used at model training time.
+        body: JSON.stringify({ expense_amounts: expenses.map(expense => expense.amount) }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.detail || 'The Isolation Forest check could not be completed.')
+      if (!Array.isArray(result.anomaly_indices)) throw new Error('The model service returned an invalid result.')
+
+      const flagged = result.anomaly_indices
+        .filter(index => Number.isInteger(index) && index >= 0 && index < expenses.length)
+        .map(index => expenses[index])
+      setFlaggedTransactions(flagged)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to connect to the model service.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <section className="panel isolation-forest-panel" aria-labelledby="isolation-forest-heading">
+      <div className="panel-title isolation-forest-title">
+        <div>
+          <h3 id="isolation-forest-heading">Isolation Forest experiment</h3>
+          <p>Optional comparison using the saved model trained on synthetic expense amounts.</p>
+        </div>
+        <button
+          className="primary-button"
+          type="button"
+          onClick={runModel}
+          disabled={!uploadedData || expenses.length < MIN_ANOMALY_SAMPLE_SIZE || isLoading}
+        >
+          {isLoading ? 'Checking…' : 'Run model check'}
+        </button>
+      </div>
+
+      <p className="isolation-forest-privacy">
+        Only finite negative expense amounts are sent to this app’s backend. Descriptions, dates, and categories stay in the browser. The model was trained on synthetic data, not your transactions; flags are experimental and do not indicate fraud or misconduct.
+      </p>
+
+      {!uploadedData ? (
+        <p className="isolation-forest-message" role="status">Upload a CSV before running this optional model check.</p>
+      ) : expenses.length < MIN_ANOMALY_SAMPLE_SIZE ? (
+        <p className="isolation-forest-message" role="status">
+          At least {MIN_ANOMALY_SAMPLE_SIZE} finite expense transactions are needed. This upload has {expenses.length}; the model has not been run.
+        </p>
+      ) : null}
+
+      {error && <p className="isolation-forest-error" role="alert">{error}</p>}
+
+      {flaggedTransactions && (flaggedTransactions.length === 0 ? (
+        <p className="isolation-forest-message" role="status">The model did not flag any expenses as unusual relative to its synthetic training data.</p>
+      ) : (
+        <div className="isolation-forest-results" aria-label="Isolation Forest flagged expenses">
+          <h4>{flaggedTransactions.length} expense{flaggedTransactions.length === 1 ? '' : 's'} flagged by the experiment</h4>
+          {flaggedTransactions.map(({ transaction, amount }, index) => (
+            <article className="isolation-forest-item" key={`${transaction.date ?? 'no-date'}-${index}`}>
+              <div className="anomaly-item-heading">
+                <h4>{typeof transaction.description === 'string' && transaction.description.trim() ? transaction.description.trim() : 'Description unavailable'}</h4>
+                <strong>{formatAmount(amount)}</strong>
+              </div>
+              <dl className="anomaly-details">
+                <div><dt>Date</dt><dd>{isValidTransactionDate(transaction.date) ? transaction.date : 'Date unavailable'}</dd></div>
+                <div><dt>Category</dt><dd>{normalizeBudgetCategory(transaction.category) ?? 'Others'}</dd></div>
+              </dl>
+              <p className="anomaly-reason" role="status">This amount was marked unusual relative to the model’s synthetic training data. It is not evidence of fraud or misconduct.</p>
+            </article>
+          ))}
+        </div>
+      ))}
+    </section>
   )
 }
 

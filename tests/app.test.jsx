@@ -49,10 +49,11 @@ const anomalyUploadResponse = {
 }
 
 async function openPageWithUpload(uploadResponse, pageName) {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
     json: async () => uploadResponse,
-  }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
   render(<App />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Get Started' }))
@@ -66,6 +67,7 @@ async function openPageWithUpload(uploadResponse, pageName) {
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await screen.findByText('CSV processed successfully. Results are available for this session only.')
   fireEvent.click(screen.getByRole('button', { name: new RegExp(pageName) }))
+  return fetchMock
 }
 
 async function openBudgetPlannerWithUpload(uploadResponse = budgetUploadResponse) {
@@ -77,7 +79,7 @@ async function openSpendingInsightsWithUpload(uploadResponse = budgetUploadRespo
 }
 
 async function openAnomalyDetectionWithUpload(uploadResponse = anomalyUploadResponse) {
-  await openPageWithUpload(uploadResponse, 'Anomaly Detection')
+  return openPageWithUpload(uploadResponse, 'Anomaly Detection')
 }
 
 async function openFinancialAssistantWithUpload(uploadResponse = sampleCategoryUploadResponse) {
@@ -511,6 +513,63 @@ describe('FinAdvisor app shell', () => {
     const transactionTable = screen.getByRole('table')
     expect(within(transactionTable).getByText('not-a-date')).toBeInTheDocument()
     expect(within(transactionTable).getAllByText('₹NaN')).toHaveLength(2)
+  })
+
+  it('sends only finite negative expense magnitudes to the Isolation Forest endpoint', async () => {
+    const fetchMock = await openAnomalyDetectionWithUpload({
+      ...anomalyUploadResponse,
+      transactions: [
+        ...anomalyUploadResponse.transactions,
+        { date: '2026-01-08', description: 'Bonus secret', category: 'Income', amount: 10000 },
+        { date: '2026-01-09', description: 'No spend', category: 'Food', amount: 0 },
+        { date: '2026-01-10', description: 'Bad value', category: 'Food', amount: 'unknown' },
+      ],
+    })
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ anomaly_indices: [4], checked_count: 5 }),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run model check' }))
+
+    await screen.findByText(/This amount was marked unusual relative to the model’s synthetic training data/)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'http://127.0.0.1:8000/transactions/anomaly/isolation-forest',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expense_amounts: [10, 11, 12, 13, 100] }),
+      }),
+    )
+    const sentBody = JSON.parse(fetchMock.mock.calls[1][1].body)
+    expect(sentBody).not.toHaveProperty('transactions')
+    expect(JSON.stringify(sentBody)).not.toContain('Large appliance')
+    expect(JSON.stringify(sentBody)).not.toContain('Bonus secret')
+    expect(screen.getAllByText('Large appliance')).toHaveLength(2) // Existing MAD and model results remain visible.
+  })
+
+  it('shows a safe Isolation Forest error when the saved model is unavailable', async () => {
+    const fetchMock = await openAnomalyDetectionWithUpload()
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ detail: 'The Isolation Forest model artifact is unavailable.' }),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run model check' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The Isolation Forest model artifact is unavailable.')
+    expect(screen.getByText('Large appliance')).toBeInTheDocument() // Existing MAD output is not removed.
+  })
+
+  it('does not call the model endpoint when there are too few expenses', async () => {
+    const fetchMock = await openAnomalyDetectionWithUpload({
+      ...anomalyUploadResponse,
+      transactions: anomalyUploadResponse.transactions.slice(0, 4),
+    })
+
+    expect(screen.getByText(/At least 5 finite expense transactions are needed/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run model check' })).toBeDisabled()
+    expect(fetchMock).toHaveBeenCalledTimes(1) // The CSV upload only.
   })
 
   it('answers largest-expense questions from negative transaction records', async () => {

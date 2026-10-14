@@ -5,6 +5,21 @@ import httpx
 from backend.app.main import app
 
 
+def request_isolation_forest(payload: dict[str, object] | None = None, *, raw_content: bytes | None = None) -> httpx.Response:
+    async def send_request() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            if raw_content is not None:
+                return await client.post(
+                    "/transactions/anomaly/isolation-forest",
+                    content=raw_content,
+                    headers={"content-type": "application/json"},
+                )
+            return await client.post("/transactions/anomaly/isolation-forest", json=payload)
+
+    return asyncio.run(send_request())
+
+
 def test_health_endpoint_reports_ok() -> None:
     async def request_health() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)
@@ -15,6 +30,75 @@ def test_health_endpoint_reports_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_isolation_forest_endpoint_returns_flagged_positions(monkeypatch) -> None:
+    import backend.app.main as main
+
+    class PredictableModel:
+        n_features_in_ = 1
+
+        def predict(self, rows: list[list[float]]) -> list[int]:
+            assert rows == [[10.0], [20.0], [30.0], [40.0], [1000.0]]
+            return [1, 1, 1, 1, -1]
+
+    monkeypatch.setattr(main, "load_default_isolation_forest", lambda: PredictableModel())
+    response = request_isolation_forest({"expense_amounts": [10, 20, 30, 40, 1000]})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "anomaly_indices": [4],
+        "checked_count": 5,
+        "model": "synthetic Isolation Forest experiment",
+        "warning": "Flags indicate values unusual relative to synthetic training data, not fraud or misconduct.",
+    }
+
+
+def test_isolation_forest_endpoint_rejects_insufficient_or_invalid_amounts() -> None:
+    insufficient = request_isolation_forest({"expense_amounts": [1, 2, 3, 4]})
+    invalid = request_isolation_forest({"expense_amounts": [1, 2, 3, 4, -5]})
+    non_finite = request_isolation_forest(raw_content=b'{"expense_amounts":[1,2,3,4,1e309]}')
+    boolean_amount = request_isolation_forest({"expense_amounts": [1, 2, 3, 4, True]})
+    extra_personal_data = request_isolation_forest({
+        "expense_amounts": [1, 2, 3, 4, 5],
+        "descriptions": ["private description"],
+    })
+
+    assert insufficient.status_code == 422
+    assert "At least 5" in insufficient.json()["detail"]
+    assert invalid.status_code == 422
+    assert "non-negative" in invalid.json()["detail"]
+    assert non_finite.status_code == 422
+    assert boolean_amount.status_code == 422
+    assert extra_personal_data.status_code == 422
+
+
+def test_isolation_forest_endpoint_validates_values_before_loading_model(monkeypatch) -> None:
+    import backend.app.main as main
+
+    def unexpected_model_load():
+        raise AssertionError("The model must not load for invalid request data.")
+
+    monkeypatch.setattr(main, "load_default_isolation_forest", unexpected_model_load)
+
+    negative = request_isolation_forest({"expense_amounts": [1, 2, 3, 4, -5]})
+    non_finite = request_isolation_forest(raw_content=b'{"expense_amounts":[1,2,3,4,1e309]}')
+
+    assert negative.status_code == 422
+    assert non_finite.status_code == 422
+
+
+def test_isolation_forest_endpoint_reports_missing_model_artifact(monkeypatch) -> None:
+    import backend.app.main as main
+
+    def missing_model():
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(main, "load_default_isolation_forest", missing_model)
+    response = request_isolation_forest({"expense_amounts": [1, 2, 3, 4, 1000]})
+
+    assert response.status_code == 503
+    assert "model artifact is unavailable" in response.json()["detail"]
 
 
 def upload_csv(filename: str, content: bytes) -> httpx.Response:

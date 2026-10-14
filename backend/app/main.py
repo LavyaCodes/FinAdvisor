@@ -5,7 +5,15 @@ from math import isfinite
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, field_validator
 from pandas.errors import EmptyDataError, ParserError
+
+from backend.app.isolation_forest import (
+    MIN_PREDICTION_SAMPLES,
+    load_default_isolation_forest,
+    predict_expense_anomalies,
+    validate_prediction_expenses,
+)
 
 app = FastAPI(title="FinAdvisor API", version="0.1.0")
 app.add_middleware(
@@ -24,10 +32,72 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_TRANSACTIONS = 10_000
 
 
+class IsolationForestRequest(BaseModel):
+    """Only expense magnitudes are sent; no transaction descriptions or labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expense_amounts: list[float]
+
+    @field_validator("expense_amounts", mode="before")
+    @classmethod
+    def reject_non_numeric_values(cls, values: object) -> object:
+        if not isinstance(values, list):
+            raise ValueError("expense_amounts must be a list of finite numbers.")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+            raise ValueError("expense_amounts must contain only finite numbers.")
+        return values
+
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     """Report that the API process is ready to receive requests."""
     return {"status": "ok"}
+
+
+@app.post("/transactions/anomaly/isolation-forest")
+def detect_isolation_forest_anomalies(request: IsolationForestRequest) -> dict[str, object]:
+    """Classify an ordered list of expense magnitudes with the saved synthetic model."""
+    if len(request.expense_amounts) > MAX_TRANSACTIONS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"At most {MAX_TRANSACTIONS:,} expense amounts can be checked at once.",
+        )
+    if len(request.expense_amounts) < MIN_PREDICTION_SAMPLES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"At least {MIN_PREDICTION_SAMPLES} expense amounts are required for the model check.",
+        )
+
+    try:
+        expense_amounts = validate_prediction_expenses(request.expense_amounts)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+
+    try:
+        model = load_default_isolation_forest()
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="The Isolation Forest model artifact is unavailable. Regenerate it with the documented training command.",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="The Isolation Forest model artifact could not be loaded safely.",
+        ) from None
+
+    try:
+        flags = predict_expense_anomalies(model, expense_amounts)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+
+    return {
+        "anomaly_indices": [index for index, is_anomaly in enumerate(flags) if is_anomaly],
+        "checked_count": len(flags),
+        "model": "synthetic Isolation Forest experiment",
+        "warning": "Flags indicate values unusual relative to synthetic training data, not fraud or misconduct.",
+    }
 
 
 @app.post("/transactions/upload")

@@ -10,6 +10,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+backend/model_artifacts/*.joblib
 
 # Environment variables and secrets
 .env

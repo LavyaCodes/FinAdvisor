@@ -1126,6 +1126,61 @@ p {
   font-size: 0.88rem;
 }
 
+.isolation-forest-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.isolation-forest-title {
+  align-items: center;
+  gap: 16px;
+}
+
+.isolation-forest-title h3 {
+  margin: 0 0 5px;
+}
+
+.isolation-forest-title p {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.isolation-forest-title .primary-button {
+  flex: 0 0 auto;
+}
+
+.isolation-forest-privacy,
+.isolation-forest-message,
+.isolation-forest-error {
+  margin: 0;
+  padding: 11px 13px;
+  border-radius: 9px;
+  background: #f5f6fa;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.isolation-forest-error {
+  background: #fdebea;
+  color: #a32620;
+}
+
+.isolation-forest-results > h4 {
+  margin: 4px 0 8px;
+  color: var(--text);
+}
+
+.isolation-forest-item {
+  padding: 16px 0;
+  border-bottom: 1px solid #edf0f6;
+}
+
+.isolation-forest-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
 .insights-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1706,6 +1761,11 @@ p {
 
   .assistant-message {
     max-width: 100%;
+  }
+
+  .isolation-forest-title {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .panel,
